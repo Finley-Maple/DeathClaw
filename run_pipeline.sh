@@ -18,7 +18,7 @@
 #   1 - Build survival dataset & disease features
 #   2 - Build disease trajectory matrix
 #   3 - Define shared cohort split
-#   4 - Generate embedding inputs (text & trajectory)
+#   4 - Generate embedding inputs (text & trajectory) + Delphi binary data
 #   5 - Compute embeddings (Qwen text & trajectory token+age)
 #   6 - Train & evaluate each method
 #   7 - Unified comparison
@@ -211,13 +211,15 @@ fi
 # ============================================================================
 if should_run 4; then
     log_separator
-    log "STEP 4: Generate embedding inputs (text & trajectory)"
+    log "STEP 4: Generate embedding inputs (text & trajectory) + Delphi binary"
     log_separator
 
-    log "  [Method 3] Generating natural-language texts..."
+    log "  [Method 3] Generating natural-language texts (with ages from trajectory)..."
     python preprocessing/natural_text_conversion.py \
-        --output-csv  data/preprocessed/text_before60.csv \
-        --output-dir  data/preprocessed/text_before60 \
+        --trajectory-csv data/preprocessed/disease_trajectory.csv \
+        --survival-csv   benchmarking/autoprognosis_survival_dataset.csv \
+        --output-csv     data/preprocessed/text_before60.csv \
+        --output-dir     data/preprocessed/text_before60 \
         2>&1 | tee -a "$LOG_FILE"
 
     log "  [Method 4] Generating trajectory texts..."
@@ -225,6 +227,19 @@ if should_run 4; then
         --output-csv  data/preprocessed/trajectory_before60.csv \
         --output-dir  data/preprocessed/trajectory_before60 \
         2>&1 | tee -a "$LOG_FILE"
+
+    # Delphi binary data (aligned with cohort_split.json)
+    if ! $SKIP_DELPHI; then
+        log "  [Method 1] Generating Delphi binary data (train/val/test.bin)..."
+        python Delphi/preprocess_delphi_binary.py \
+            --trajectory-csv data/preprocessed/disease_trajectory.csv \
+            --survival-csv   benchmarking/autoprognosis_survival_dataset.csv \
+            --cohort-json    evaluation/cohort_split.json \
+            --output-dir     Delphi/data/ukb_respiratory_data \
+            2>&1 | tee -a "$LOG_FILE"
+    else
+        log "  [Method 1] Skipping Delphi binary preprocessing (--skip-delphi)"
+    fi
 
     log "  Step 4 complete."
 fi
@@ -279,9 +294,15 @@ if should_run 6; then
     if ! $SKIP_DELPHI; then
         log "  [Method 1] Evaluating Delphi..."
         if [[ -f Delphi/Delphi-2M-respiratory/ckpt.pt ]]; then
-            python evaluation/evaluate_delphi.py \
-                --device "$DEVICE" \
-                2>&1 | tee -a "$LOG_FILE"
+            if [[ -f Delphi/data/ukb_respiratory_data/test.bin ]] || [[ -f Delphi/data/ukb_respiratory_data/val.bin ]]; then
+                python evaluation/evaluate_delphi.py \
+                    --split test \
+                    --device "$DEVICE" \
+                    2>&1 | tee -a "$LOG_FILE"
+            else
+                log "  WARNING: Delphi binary data not found."
+                log "  Run step 4 first, or run: python Delphi/preprocess_delphi_binary.py"
+            fi
         else
             log "  WARNING: Delphi checkpoint not found (Delphi/Delphi-2M-respiratory/ckpt.pt)"
             log "  Skipping Delphi evaluation."

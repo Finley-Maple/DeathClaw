@@ -619,38 +619,51 @@ class NaturalTextConverter:
 # Disease-before-60 text converter (new, for embedding method 1)
 # ---------------------------------------------------------------------------
 
+# Column name pattern in disease_trajectory.csv:
+#   date_{icd_slug}_first_reported_{disease_name}_{field_id}_age
+# e.g. date_e78_first_reported_disorders_of_lipoprotein_metabolism_and_other_lipidaemias_130636_age
+import re
+
+_COL_PATTERN = re.compile(
+    r"^date_([a-z]\d+)_first_reported_(.+?)_(\d+)_age$"
+)
+
+
+def _parse_disease_col(col: str):
+    """
+    Parse a trajectory column name into (icd_code, readable_name).
+
+    Example:
+        'date_e78_first_reported_disorders_of_lipoprotein_metabolism_..._130636_age'
+        → ('E78', 'disorders of lipoprotein metabolism and other lipidaemias')
+    """
+    m = _COL_PATTERN.match(col)
+    if m:
+        icd = m.group(1).upper()
+        name = m.group(2).replace("_", " ")
+        return icd, name
+    return None, col.replace("_", " ")
+
+
 class DiseaseBefore60TextConverter:
     """
     Produce a concise natural-language clinical summary per patient,
-    restricted to disease history before age 60 and key demographics.
+    with disease history **including age at diagnosis** before age 60.
+
+    Uses the disease_trajectory.csv (age-at-diagnosis matrix) to produce
+    text like:
+        "At age 20.3, patient was diagnosed with chronic kidney disease.
+         At age 40.6, patient was diagnosed with asthma."
 
     Input:
-        - disease_before60_features.csv   (binary disease flags per eid)
+        - disease_trajectory.csv           (age at diagnosis per disease)
         - autoprognosis_survival_dataset.csv  (demographics / biomarkers)
 
     Output:
         - One text file per eid  OR  a single CSV  eid -> text
     """
 
-    # Friendly names for the binary disease flags produced by preprocess_diagnosis.py
-    DISEASE_NAMES = {
-        "atrial_fibrillation": "atrial fibrillation",
-        "diabetes_t1": "type 1 diabetes",
-        "diabetes_t2": "type 2 diabetes",
-        "diabetes_any": "diabetes (any type)",
-        "ckd": "chronic kidney disease",
-        "migraine": "migraine",
-        "systemic_lupus": "systemic lupus erythematosus",
-        "hiv": "HIV infection",
-        "mental_illness": "severe mental illness",
-        "lipid_disorder": "lipid disorder",
-        "cholesterol_disorder": "cholesterol disorder",
-        "depression": "depression",
-        "stroke": "stroke or transient ischaemic attack",
-        "erectile_dysfunction": "erectile dysfunction",
-        "rheumatoid_arthritis": "rheumatoid arthritis",
-        "hypertension_diagnosis": "hypertension",
-    }
+    AGE_CUTOFF = 60.0
 
     SEX_MAP = {0: "female", 0.0: "female", 1: "male", 1.0: "male"}
     SMOKING_MAP = {0: "never smoker", 0.0: "never smoker",
@@ -667,31 +680,33 @@ class DiseaseBefore60TextConverter:
 
     def __init__(
         self,
-        disease_csv: Path = None,
+        trajectory_csv: Path = None,
         survival_csv: Path = None,
     ):
-        default_disease = PROJECT_ROOT / "benchmarking" / "disease_before60_features.csv"
+        default_trajectory = PROJECT_ROOT / "data" / "preprocessed" / "disease_trajectory.csv"
         default_survival = PROJECT_ROOT / "benchmarking" / "autoprognosis_survival_dataset.csv"
 
-        self.disease_csv = disease_csv or default_disease
+        self.trajectory_csv = trajectory_csv or default_trajectory
         self.survival_csv = survival_csv or default_survival
 
     def _load_data(self, eids: Optional[List[int]] = None):
-        """Load and merge disease flags with survival demographics."""
-        disease_df = pd.read_csv(self.disease_csv)
-        disease_df["eid"] = disease_df["eid"].astype(int)
-
+        """Load trajectory matrix and survival demographics, merge by eid."""
         surv_df = pd.read_csv(self.survival_csv)
         surv_df["eid"] = surv_df["eid"].astype(int)
 
-        merged = surv_df.merge(disease_df, on="eid", how="left", suffixes=("", "_dup"))
-        # Drop duplicate disease columns from survival (they overlap)
-        dup_cols = [c for c in merged.columns if c.endswith("_dup")]
+        traj_df = pd.read_csv(self.trajectory_csv)
+        traj_df["eid"] = traj_df["eid"].astype(int)
+
+        merged = surv_df.merge(traj_df, on="eid", how="inner", suffixes=("", "_traj"))
+        # Drop duplicate columns
+        dup_cols = [c for c in merged.columns if c.endswith("_traj")]
         merged.drop(columns=dup_cols, inplace=True)
 
         if eids is not None:
-            eid_set = set(eids)
-            merged = merged[merged["eid"].isin(eid_set)]
+            merged = merged[merged["eid"].isin(set(eids))]
+
+        # Identify age columns from trajectory
+        self._age_columns = [c for c in traj_df.columns if c.endswith("_age") and c != "eid"]
 
         return merged
 
@@ -726,17 +741,28 @@ class DiseaseBefore60TextConverter:
         if pd.notna(alc):
             parts.append(f"Alcohol consumption: {self.ALCOHOL_MAP.get(alc, 'unknown')}.")
 
-        # -- Disease history before 60 ------------------------------------
-        diseases_present: List[str] = []
-        for col, name in self.DISEASE_NAMES.items():
-            val = row.get(col)
-            if pd.notna(val) and int(val) == 1:
-                diseases_present.append(name)
+        # -- Disease history before 60 (with ages) -------------------------
+        events: List[tuple] = []  # (age, "ICD_CODE disease_name")
+        for col in self._age_columns:
+            age_val = row.get(col)
+            if pd.notna(age_val):
+                age_years = float(age_val)
+                if 0 <= age_years < self.AGE_CUTOFF:
+                    icd, name = _parse_disease_col(col)
+                    if icd:
+                        events.append((age_years, f"{icd} {name}"))
+                    else:
+                        events.append((age_years, name))
 
-        if diseases_present:
-            parts.append(
-                "Diseases diagnosed before age 60: " + ", ".join(diseases_present) + "."
-            )
+        events.sort(key=lambda x: x[0])
+
+        if events:
+            disease_sentences = []
+            for age, disease in events:
+                disease_sentences.append(
+                    f"At age {age:.1f}, patient was diagnosed with {disease}."
+                )
+            parts.append("Disease history before age 60: " + " ".join(disease_sentences))
         else:
             parts.append("No diseases diagnosed before age 60.")
 
@@ -772,6 +798,8 @@ class DiseaseBefore60TextConverter:
         Optionally writes individual .txt files and/or a CSV.
         """
         merged = self._load_data(eids)
+        print(f"Building text for {len(merged)} patients "
+              f"({len(self._age_columns)} disease age columns)...")
         records: List[Dict] = []
 
         for _, row in merged.iterrows():
@@ -797,6 +825,18 @@ def main_before60():
     """CLI entry point for generating disease-before-60 texts."""
     parser = argparse.ArgumentParser(
         description="Generate natural-language disease-before-60 summaries per patient."
+    )
+    parser.add_argument(
+        "--trajectory-csv",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "preprocessed" / "disease_trajectory.csv",
+        help="Path to disease_trajectory.csv (age-at-diagnosis matrix).",
+    )
+    parser.add_argument(
+        "--survival-csv",
+        type=Path,
+        default=PROJECT_ROOT / "benchmarking" / "autoprognosis_survival_dataset.csv",
+        help="Path to autoprognosis_survival_dataset.csv.",
     )
     parser.add_argument(
         "--cohort-json",
@@ -826,7 +866,10 @@ def main_before60():
         eids = cohort["train_eids"] + cohort["val_eids"] + cohort["test_eids"]
         print(f"Loaded {len(eids)} eids from cohort split.")
 
-    converter = DiseaseBefore60TextConverter()
+    converter = DiseaseBefore60TextConverter(
+        trajectory_csv=args.trajectory_csv,
+        survival_csv=args.survival_csv,
+    )
     converter.generate_texts(eids=eids, output_dir=args.output_dir, output_csv=args.output_csv)
 
 

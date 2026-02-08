@@ -2,20 +2,22 @@
 Delphi evaluation adapter for the shared cohort.
 
 Uses the `evaluate_auc_pipeline()` function from Delphi/evaluate_auc.py
-as the canonical evaluation backend. Ensures the val/test bins are
-restricted to the shared cohort.
+as the canonical evaluation backend.
 
 This script:
-  1. Loads the shared cohort split.
-  2. Loads Delphi model checkpoint + validation data.
-  3. Filters val data to shared cohort eids (val + test).
-  4. Runs evaluate_auc_pipeline for the Death token.
-  5. Saves results to evaluation/delphi_results/.
+  1. Loads the Delphi model checkpoint.
+  2. Loads the test.bin (or val.bin) aligned with cohort_split.json.
+  3. Runs evaluate_auc_pipeline for the Death token.
+  4. Saves results to evaluation/delphi_results/.
+
+NOTE: Delphi binary data must be generated first using:
+    python Delphi/preprocess_delphi_binary.py
 
 Usage:
     python evaluation/evaluate_delphi.py \
         --ckpt-path Delphi/Delphi-2M-respiratory/ckpt.pt \
         --data-path Delphi/data/ukb_respiratory_data \
+        --split test \
         --device cuda
 """
 
@@ -41,22 +43,6 @@ DELPHI_LABELS = PROJECT_ROOT / "Delphi" / "delphi_labels_chapters_colours_icd.cs
 DEFAULT_OUTPUT = PROJECT_ROOT / "evaluation" / "delphi_results"
 
 
-def load_cohort_eids(split: str = "val_test") -> list:
-    """Load eids for the specified split(s)."""
-    with open(COHORT_SPLIT) as f:
-        cohort = json.load(f)
-    if split == "val":
-        return cohort["val_eids"]
-    elif split == "test":
-        return cohort["test_eids"]
-    elif split == "val_test":
-        return cohort["val_eids"] + cohort["test_eids"]
-    elif split == "all":
-        return cohort["train_eids"] + cohort["val_eids"] + cohort["test_eids"]
-    else:
-        raise ValueError(f"Unknown split: {split}")
-
-
 def evaluate_delphi(args):
     """Run Delphi death-token AUC evaluation on the shared cohort."""
     device = args.device
@@ -71,29 +57,47 @@ def evaluate_delphi(args):
     model.eval()
     model = model.to(device)
 
-    # Load validation data
-    val_bin_path = Path(args.data_path) / "val.bin"
-    print(f"Loading validation data from {val_bin_path}...")
-    val = np.fromfile(str(val_bin_path), dtype=np.uint32).reshape(-1, 3).astype(np.int64)
-    val_p2i = get_p2i(val)
+    # Load evaluation data
+    # Prefer test.bin for final evaluation; fall back to val.bin
+    data_dir = Path(args.data_path)
+    split = args.split
+    bin_path = data_dir / f"{split}.bin"
 
-    # Optionally filter to shared cohort eids
-    # NOTE: Delphi's binary format uses internal patient indices, not eids directly.
-    # The p2i mapping contains [start_idx, length] per patient.
-    # If the binary data was built from the same cohort, all patients are valid.
-    # If not, we would need the eid-to-patient-index mapping, which requires
-    # the original preprocessing notebook. For now, we evaluate on all available
-    # patients in val.bin and note this in the output.
+    if not bin_path.exists():
+        # Try fallback
+        fallbacks = ["test.bin", "val.bin"]
+        found = False
+        for fb in fallbacks:
+            candidate = data_dir / fb
+            if candidate.exists():
+                print(f"  {bin_path} not found, using {candidate} instead.")
+                bin_path = candidate
+                split = fb.replace(".bin", "")
+                found = True
+                break
 
-    n_patients = len(val_p2i)
+        if not found:
+            print(f"\nERROR: No binary data found in {data_dir}/")
+            print(f"  Expected: {data_dir}/test.bin or {data_dir}/val.bin")
+            print(f"\n  Run Delphi preprocessing first:")
+            print(f"    python Delphi/preprocess_delphi_binary.py")
+            print(f"\n  This will generate train.bin, val.bin, test.bin")
+            print(f"  aligned with the shared cohort_split.json.")
+            sys.exit(1)
+
+    print(f"Loading {split} data from {bin_path}...")
+    data = np.fromfile(str(bin_path), dtype=np.uint32).reshape(-1, 3).astype(np.int64)
+    data_p2i = get_p2i(data)
+
+    n_patients = len(data_p2i)
     if args.max_patients > 0:
         n_patients = min(n_patients, args.max_patients)
 
-    print(f"Evaluating on {n_patients} patients...")
+    print(f"Evaluating on {n_patients} patients ({split} split)...")
     d_batch = get_batch(
         range(n_patients),
-        val,
-        val_p2i,
+        data,
+        data_p2i,
         select="left",
         block_size=80,
         device=device,
@@ -106,16 +110,22 @@ def evaluate_delphi(args):
 
     # Find Death token index
     death_rows = delphi_labels[delphi_labels["name"].str.contains("Death", case=False, na=False)]
-    if len(death_rows) > 0:
+    # Exclude ICD codes about death (e.g. "O96 Death from ...") - only want the
+    # pure "Death" label
+    death_rows_exact = death_rows[death_rows["name"].str.strip() == "Death"]
+    if len(death_rows_exact) > 0:
+        death_token_ids = death_rows_exact["index"].tolist()
+    elif len(death_rows) > 0:
         death_token_ids = death_rows["index"].tolist()
-        print(f"Death token indices: {death_token_ids}")
     else:
-        # Fallback to known indices
-        death_token_ids = [1268, 1269]
-        print(f"Using default Death token indices: {death_token_ids}")
+        # Fallback to known index
+        death_token_ids = [1269]
+    print(f"Death token indices: {death_token_ids}")
 
     # Run evaluation
-    output_path = args.output_dir
+    output_path = Path(args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
     df_unpooled, df_pooled = evaluate_auc_pipeline(
         model=model,
         d100k=d_batch,
@@ -130,10 +140,10 @@ def evaluate_delphi(args):
         device=device,
         seed=seed,
         n_bootstrap=args.n_bootstrap,
-        meta_info={"method": "delphi", "cohort": "shared"},
+        meta_info={"method": "delphi", "cohort": "shared", "split": split},
     )
 
-    print("\n=== Delphi Death Token AUC Results ===")
+    print(f"\n=== Delphi Death Token AUC Results ({split} split) ===")
     death_results = df_pooled[df_pooled["name"].str.contains("Death", case=False, na=False)]
     if len(death_results) > 0:
         for _, row in death_results.iterrows():
@@ -150,11 +160,12 @@ def evaluate_delphi(args):
     # Save summary
     summary = {
         "method": "delphi",
+        "split": split,
         "n_patients": n_patients,
         "death_token_ids": death_token_ids,
         "results": death_results.to_dict("records") if len(death_results) > 0 else [],
     }
-    summary_path = Path(output_path) / "delphi_death_summary.json"
+    summary_path = output_path / "delphi_death_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2, default=str)
     print(f"\nSummary saved to {summary_path}")
@@ -168,6 +179,9 @@ def main():
                         default=str(PROJECT_ROOT / "Delphi" / "Delphi-2M-respiratory" / "ckpt.pt"))
     parser.add_argument("--data-path", type=str,
                         default=str(PROJECT_ROOT / "Delphi" / "data" / "ukb_respiratory_data"))
+    parser.add_argument("--split", type=str, default="test",
+                        choices=["train", "val", "test"],
+                        help="Which split to evaluate on (default: test)")
     parser.add_argument("--output-dir", type=str, default=str(DEFAULT_OUTPUT))
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=1337)

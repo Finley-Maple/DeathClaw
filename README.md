@@ -114,14 +114,16 @@ Create a single train/val/test split (70/15/15, stratified) used by all methods.
 python evaluation/cohort_split.py              # → evaluation/cohort_split.json
 ```
 
-### Step 4: Generate embedding inputs
+### Step 4: Generate embedding inputs & Delphi binary data
 
-**Method 3 (text embedding):** convert tabular data to natural-language summaries.
+**Method 3 (text embedding):** convert trajectory data to natural-language summaries with age at diagnosis (e.g. "At age 20.3, patient was diagnosed with G43 migraine.").
 
 ```bash
 python preprocessing/natural_text_conversion.py \
-    --output-csv  data/preprocessed/text_before60.csv \
-    --output-dir  data/preprocessed/text_before60
+    --trajectory-csv data/preprocessed/disease_trajectory.csv \
+    --survival-csv   benchmarking/autoprognosis_survival_dataset.csv \
+    --output-csv     data/preprocessed/text_before60.csv \
+    --output-dir     data/preprocessed/text_before60
 ```
 
 **Method 4 (trajectory embedding):** convert trajectory matrix to Delphi-style text.
@@ -131,6 +133,15 @@ python preprocessing/generate_trajectory_text.py \
     --output-csv  data/preprocessed/trajectory_before60.csv \
     --output-dir  data/preprocessed/trajectory_before60
 ```
+
+**Method 1 (Delphi binary data):** convert trajectory + demographics to Delphi binary format, aligned with the shared cohort split.
+
+```bash
+python Delphi/preprocess_delphi_binary.py \
+    --output-dir  Delphi/data/ukb_respiratory_data
+```
+
+This generates `train.bin`, `val.bin`, `test.bin` using the same patient splits as all other methods.
 
 ### Step 5: Compute embeddings
 
@@ -171,8 +182,8 @@ python embedding/trajectory_embedding.py \
 Each evaluation script trains on the shared train split and evaluates on val/test.
 
 ```bash
-# Method 1: Delphi
-python evaluation/evaluate_delphi.py
+# Method 1: Delphi (requires step 4 Delphi binary data)
+python evaluation/evaluate_delphi.py --split test
 
 # Method 2: Benchmarking (CoxPH on binary disease features)
 python evaluation/evaluate_benchmarking.py
@@ -223,3 +234,8 @@ Key dependencies and what uses them:
 | `pandas` | >=2.0.0 | All components |
 
 See also: `Delphi/requirements.txt` (original Delphi deps), `embedding/requirements_qwen.txt` (Qwen-specific).
+
+## TODOs
+
+1. traj_before60: add hints for LLM to understand the text
+2. text_before60: add timepoints for alcohol and smoking
