@@ -1,0 +1,74 @@
+# ==========================
+# Large data files
+# ==========================
+data/ukb_*.csv
+data/batch_files/
+data/preprocessed/
+*.bin
+*.pt
+
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ==========================
+# Virtual environment artifacts
+# ==========================
+Delphi/lib/
+Delphi/bin/
+Delphi/pyvenv.cfg
+Delphi/include/
+venv/
+.venv/
+env/
+
+# ==========================
+# Weights & Biases
+# ==========================
+wandb/
+
+# ==========================
+# OS files
+# ==========================
+.DS_Store
+Thumbs.db
+
+# ==========================
+# Editor temporaries
+# ==========================
+~$*
+*.swp
+*.swo
+*~
+
+# ==========================
+# Model checkpoints (large)
+# ==========================
+Delphi/Delphi-2M-respiratory/
+Delphi/Delphi-2M/
+
+# ==========================
+# AutoPrognosis workspace (model artifacts)
+# ==========================
+benchmarking/autoprognosis_workspace/
+
+# ==========================
+# Embedding outputs (large)
+# ==========================
+data/preprocessed/
+
+# ==========================
+# Docs / reference (non-code) - kept in repo for now
+# ==========================
+
+# ==========================
+# Cursor / IDE
+# ==========================
+.cursor/

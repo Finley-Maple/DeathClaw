@@ -1,0 +1,45 @@
+
+================================================================================
+UK BIOBANK FIELD MAPPING SUMMARY (Hierarchical)
+================================================================================
+
+Total Fields: 3206
+
+Top-level Categories: 63
+
+Leaf Categories (containing fields): 65
+
+Fields by Leaf Category (showing top 20):
+  - Certain infectious and parasitic diseases: 346 fields
+  - NMR metabolomics: 251 fields
+  - Congenital disruptions and chromosomal: 174 fields
+  - Genitourinary system disorders: 164 fields
+  - Musculoskeletal system and connective tissue: 158 fields
+  - Mental and behavioural disorders: 156 fields
+  - Pregnancy, childbirth and the puerperium: 152 fields
+  - Endocrine, nutritional and metabolic diseases: 146 fields
+  - Digestive system disorders: 144 fields
+  - Skin and subcutaneous tissue disorders: 144 fields
+  - Nervous system disorders: 136 fields
+  - Respiratory system disorders: 128 fields
+  - Certain conditions originating in the perinatal period: 118 fields
+  - Eye and adnexa disorders: 94 fields
+  - Blood, blood-forming organs and certain immune disorders: 68 fields
+  - Online follow-up ⏵ Work environment ⏵ Medical information: 55 fields
+  - Mental health: 48 fields
+  - Online follow-up ⏵ Work environment ⏵ Employment history: 42 fields
+  - Bone-densitometry of heel: 41 fields
+  - Body composition by impedance: 38 fields
+  ... and 45 more categories
+
+Fields by Value Type:
+  - compound: 3 fields
+  - date: 1070 fields
+  - int: 187 fields
+  - multi choice: 44 fields
+  - real: 458 fields
+  - single choice: 1419 fields
+  - string: 24 fields
+  - time: 1 fields
+
+================================================================================

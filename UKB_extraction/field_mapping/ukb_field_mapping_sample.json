@@ -1,0 +1,113 @@
+{
+  "diagnosis": {
+    "41270": "Diagnoses - ICD10 (all hospital diagnoses)",
+    "41202": "Diagnoses - main ICD10 (hospital main diagnosis)",
+    "41204": "Diagnoses - secondary ICD10 (hospital secondary diagnoses)",
+    "40001": "Underlying (primary) cause of death ICD10",
+    "40002": "Contributory (secondary) causes of death ICD10",
+    "20002": "Non-cancer illness code, self-reported (includes respiratory)"
+  },
+  "demographics": {
+    "31": "Sex",
+    "34": "Year of birth",
+    "52": "Month of birth",
+    "21000": "Ethnic background",
+    "21001": "Body mass index (BMI)",
+    "50": "Standing height",
+    "23104": "Weight",
+    "738": "Income before tax",
+    "6138": "Qualifications"
+  },
+  "environmental": {
+    "1558": "Alcohol intake frequency",
+    "20116": "Smoking status",
+    "2867": "Age started smoking in current smokers",
+    "2887": "Age stopped smoking",
+    "22506": "Tobacco smoking (pack years)",
+    "1787": "Maternal smoking around birth",
+    "24003": "Nitrogen dioxide air pollution 2010",
+    "24004": "Nitrogen oxides air pollution 2010",
+    "24005": "Particulate matter air pollution (pm10)",
+    "24006": "Particulate matter air pollution (pm2.5)",
+    "24016": "Particulate matter air pollution (pm2.5) absorbance"
+  },
+  "blood_routine": {
+    "30000": "White blood cell (leukocyte) count",
+    "30010": "Red blood cell (erythrocyte) count",
+    "30020": "Haemoglobin concentration",
+    "30030": "Haematocrit percentage",
+    "30040": "Mean corpuscular volume",
+    "30050": "Mean corpuscular haemoglobin",
+    "30060": "Mean corpuscular haemoglobin concentration",
+    "30070": "Red blood cell (erythrocyte) distribution width",
+    "30080": "Platelet count",
+    "30090": "Platelet distribution width",
+    "30100": "Mean platelet (thrombocyte) volume",
+    "30110": "Neutrophil count",
+    "30120": "Lymphocyte count",
+    "30130": "Monocyte count",
+    "30140": "Eosinophil count",
+    "30150": "Basophil count"
+  },
+  "liver_function": {
+    "30600": "Albumin",
+    "30610": "Alkaline phosphatase",
+    "30620": "Alanine aminotransferase",
+    "30630": "Aspartate aminotransferase",
+    "30640": "Direct bilirubin",
+    "30650": "Urea",
+    "30660": "Cholesterol",
+    "30670": "Creatinine",
+    "30680": "C-reactive protein",
+    "30690": "Gamma glutamyltransferase",
+    "30700": "Glucose",
+    "30710": "Glycated haemoglobin (HbA1c)",
+    "30720": "HDL cholesterol",
+    "30730": "IGF-1",
+    "30740": "LDL direct",
+    "30750": "Lipoprotein A",
+    "30760": "Phosphate",
+    "30770": "SHBG",
+    "30780": "Total bilirubin",
+    "30790": "Testosterone",
+    "30800": "Total protein",
+    "30810": "Triglycerides"
+  },
+  "respiratory_assessment": {
+    "2316": "Wheeze or whistling in the chest in last year",
+    "2335": "Chest pain or discomfort",
+    "4717": "Shortness of breath walking on level ground",
+    "3786": "Age hay fever, rhinitis or eczema diagnosed by doctor",
+    "6152": "Medication for cholesterol, blood pressure or diabetes",
+    "20255": "Spirometry QC measure",
+    "20256": "FEV1 Z-score",
+    "20257": "FVC Z-score",
+    "20258": "FEV1/FVC ratio Z-score",
+    "3063": "FEV1, best measure",
+    "3064": "FVC, best measure"
+  },
+  "psychological": {
+    "20002": "Non-cancer illness code, self-reported (includes mental health)",
+    "4598": "Ever depressed for a whole week",
+    "4631": "Ever unenthusiastic/disinterested for a whole week",
+    "5375": "Depression possibly related to stressful experience",
+    "5663": "Anxiety, tension or general nervousness",
+    "20126": "Bipolar and major depression status",
+    "2090": "Seen doctor (GP) for nerves, anxiety, tension or depression",
+    "2100": "Seen a psychiatrist for nerves, anxiety, tension or depression",
+    "4559": "Duration of walks",
+    "1558": "Alcohol intake frequency"
+  },
+  "imaging": {
+    "20208": "Long axis heart images (Cardiac MRI DICOM)",
+    "20205": "ECG datasets",
+    "20252": "T1 structural brain images (NIFTI)"
+  },
+  "death": {
+    "40000": "Date of death",
+    "40007": "Age at death",
+    "40001": "Underlying (primary) cause of death: ICD10",
+    "40002": "Contributory (secondary) causes of death: ICD10",
+    "40010": "Description of cause of death"
+  }
+}

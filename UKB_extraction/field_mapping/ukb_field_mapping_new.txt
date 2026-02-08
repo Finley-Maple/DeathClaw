@@ -1,0 +1,45 @@
+
+================================================================================
+UK BIOBANK FIELD MAPPING SUMMARY (Hierarchical)
+================================================================================
+
+Total Fields: 3206
+
+Top-level Categories: 6
+
+Leaf Categories (containing fields): 66
+
+Fields by Leaf Category (showing top 20):
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Certain infectious and parasitic diseases: 346 fields
+  - Biological samples ⏵ Blood assays ⏵ NMR metabolomics: 251 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Congenital disruptions and chromosomal abnormalities: 174 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Genitourinary system disorders: 164 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Musculoskeletal system and connective tissue disorders: 158 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Mental and behavioural disorders: 156 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Pregnancy, childbirth and the puerperium: 152 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Endocrine, nutritional and metabolic diseases: 146 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Digestive system disorders: 144 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Skin and subcutaneous tissue disorders: 144 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Nervous system disorders: 136 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Respiratory system disorders: 128 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Certain conditions originating in the perinatal period: 118 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Eye and adnexa disorders: 94 fields
+  - Health outcomes ⏵ Externally sourced health outcomes ⏵ First occurrences ⏵ Blood, blood-forming organs and certain immune disorders: 68 fields
+  - Online follow-up ⏵ Work environment ⏵ Medical information: 55 fields
+  - Assessment centre ⏵ Touchscreen ⏵ Psychosocial factors ⏵ Mental health: 44 fields
+  - Online follow-up ⏵ Work environment ⏵ Employment history: 42 fields
+  - Assessment centre ⏵ Physical measures ⏵ Bone-densitometry of heel: 41 fields
+  - Assessment centre ⏵ Physical measures ⏵ Anthropometry ⏵ Body composition by impedance: 38 fields
+  ... and 46 more categories
+
+Fields by Value Type:
+  - compound: 3 fields
+  - date: 1070 fields
+  - int: 187 fields
+  - multi choice: 44 fields
+  - real: 458 fields
+  - single choice: 1419 fields
+  - string: 24 fields
+  - time: 1 fields
+
+================================================================================
