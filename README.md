@@ -37,8 +37,48 @@ Predict **death after age 60** using patient features and disease history before
 │   └── unified_evaluation.py           # Compare all methods in one table
 ├── data/                   # Raw & processed data (gitignored)
 ├── UKB_extraction/         # UK Biobank data extraction tools
-└── docs/                   # Proposals, references
+├── docs/                   # Proposals, references
+└── run_pipeline.sh         # One-command pipeline runner (steps 1–7)
 ```
+
+## Quick Start (one command)
+
+Run the entire pipeline end-to-end with `run_pipeline.sh`:
+
+```bash
+# Default: 10k sample, random trajectory token embeddings
+bash run_pipeline.sh
+
+# Full dataset (all UKB participants)
+bash run_pipeline.sh --full
+
+# Full dataset + Qwen token embeddings (GPU recommended)
+bash run_pipeline.sh --full --token-mode qwen
+
+# Skip preprocessing if data already exists
+bash run_pipeline.sh --skip-preprocess
+
+# Run only specific steps (e.g. steps 5-7)
+bash run_pipeline.sh --steps 5,6,7
+
+# Skip Delphi (if no checkpoint available)
+bash run_pipeline.sh --skip-delphi
+```
+
+Options:
+
+| Flag | Description |
+|------|-------------|
+| `--full` | Use all participants instead of a 10k sample |
+| `--sample-size N` | Custom sample size (default: 10000) |
+| `--token-mode random\|qwen` | Trajectory token embedding mode (default: random) |
+| `--skip-preprocess` | Skip steps 1-2 if CSV files already exist |
+| `--skip-delphi` | Skip Delphi evaluation |
+| `--steps 1,2,3,...` | Run only specific steps |
+| `--device cuda\|cpu` | Force device (auto-detected by default) |
+| `--random-state N` | Random seed (default: 42) |
+
+The script logs everything to `pipeline_YYYYMMDD_HHMMSS.log` and prints the comparison table at the end.
 
 ## Pipeline (step by step)
 
@@ -52,7 +92,9 @@ These scripts produce the two CSV files that all downstream steps depend on.
 
 ```bash
 python benchmarking/preprocess_diagnosis.py    # → disease_before60_features.csv
-python benchmarking/preprocess_survival.py     # → autoprognosis_survival_dataset.csv
+python benchmarking/preprocess_survival.py     # → autoprognosis_survival_dataset.csv (10k sample)
+# Or use the full dataset:
+python benchmarking/preprocess_survival.py --all
 ```
 
 ### Step 2: Build disease trajectory matrix

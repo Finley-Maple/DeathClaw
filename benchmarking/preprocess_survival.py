@@ -604,9 +604,12 @@ def preprocess(sample_size: int = 10_000, random_state: int = 42) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Prepare AutoPrognosis survival dataset.")
     parser.add_argument("--sample-size", type=int, default=10_000, help="Number of participants to sample.")
+    parser.add_argument("--all", action="store_true",
+                        help="Use all participants (overrides --sample-size).")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for sampling.")
     args = parser.parse_args()
-    preprocess(sample_size=args.sample_size, random_state=args.random_state)
+    sample_size = 999_999_999 if args.all else args.sample_size
+    preprocess(sample_size=sample_size, random_state=args.random_state)
 
 
 if __name__ == "__main__":
