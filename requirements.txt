@@ -27,9 +27,11 @@ scipy>=1.10.0                     # Delphi: DeLong AUC; preprocessing: stats
 # ---------------------------------------------------------------------------
 # PyTorch (Delphi + Qwen3-Embedding)
 # ---------------------------------------------------------------------------
-# Delphi originally pinned torch==2.3.0; we relax to >=2.3.0.
+# Delphi originally pinned torch==2.3.0, but transformers>=4.51.0 requires
+# PyTorch>=2.4.0 (it silently disables PyTorch otherwise, causing model
+# loading to fail). Delphi code itself works fine with newer PyTorch.
 # Install the CUDA variant separately if needed (see above).
-torch>=2.3.0
+torch>=2.4.0
 
 # ---------------------------------------------------------------------------
 # Qwen3-Embedding (methods 3 & 4)

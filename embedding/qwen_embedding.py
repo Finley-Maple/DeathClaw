@@ -12,7 +12,7 @@ Available models (pick based on hardware):
 All models support Matryoshka Representation Learning (MRL), so you can
 truncate the embedding to any dimension <= max via --embedding-dim.
 
-Requires: transformers>=4.51.0, torch
+Requires: transformers>=4.51.0, torch>=2.4.0
 
 Usage:
     # Local / CPU (0.6B model):
@@ -32,7 +32,8 @@ import argparse
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -47,6 +48,46 @@ from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Version check — fail fast with actionable message
+# ---------------------------------------------------------------------------
+
+_MIN_TORCH = (2, 4, 0)
+_MIN_TRANSFORMERS = (4, 51, 0)
+
+
+def _check_versions():
+    """Verify that torch and transformers meet minimum version requirements."""
+    # Check torch
+    torch_parts = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:3])
+    if torch_parts < _MIN_TORCH:
+        logger.error(
+            f"PyTorch {torch.__version__} is too old. "
+            f"transformers>=4.51.0 requires PyTorch >= {'.'.join(map(str, _MIN_TORCH))}.\n"
+            f"  Upgrade: pip install 'torch>={'.'.join(map(str, _MIN_TORCH))}' "
+            f"--index-url https://download.pytorch.org/whl/cu121"
+        )
+        sys.exit(1)
+
+    # Check transformers
+    try:
+        import transformers
+        tf_parts = tuple(int(x) for x in transformers.__version__.split(".")[:3])
+        if tf_parts < _MIN_TRANSFORMERS:
+            logger.error(
+                f"transformers {transformers.__version__} is too old. "
+                f"Qwen3-Embedding requires >= {'.'.join(map(str, _MIN_TRANSFORMERS))}.\n"
+                f"  Upgrade: pip install 'transformers>={'.'.join(map(str, _MIN_TRANSFORMERS))}'"
+            )
+            sys.exit(1)
+    except ImportError:
+        logger.error(
+            "transformers is not installed.\n"
+            "  Install: pip install 'transformers>=4.51.0' accelerate"
+        )
+        sys.exit(1)
+
 
 # Default embedding dimensions per model (max native dim)
 MODEL_DEFAULT_DIM = {
@@ -88,7 +129,7 @@ def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tenso
 class EmbeddingConfig:
     """Configuration for Qwen3-Embedding extraction."""
     # Model selection:
-    #   GPU:   Qwen/Qwen3-Embedding-8B  (best quality, ~16 GB)
+    #   GPU:   Qwen/Qwen3-Embedding-8B  (4096-dim, best quality)
     #   Mid:   Qwen/Qwen3-Embedding-4B  (~8 GB)
     #   Local: Qwen/Qwen3-Embedding-0.6B (~1.2 GB, CPU-friendly)
     model_name: str = "Qwen/Qwen3-Embedding-0.6B"
@@ -120,12 +161,10 @@ class QwenEmbeddingExtractor:
 
     def _load_model(self):
         """Load the Qwen3-Embedding model."""
-        try:
-            from transformers import AutoModel, AutoTokenizer
-        except ImportError as e:
-            logger.error(f"transformers not found: {e}")
-            logger.error("Install: pip install 'transformers>=4.51.0' torch accelerate")
-            raise
+        # Validate versions before attempting to load
+        _check_versions()
+
+        from transformers import AutoModel, AutoTokenizer
 
         logger.info(f"Loading {self.config.model_name} on {self.config.device}...")
 
@@ -141,7 +180,12 @@ class QwenEmbeddingExtractor:
         if self.config.device == "cuda":
             model_kwargs["torch_dtype"] = torch.float16
             if self.config.use_flash_attn:
-                model_kwargs["attn_implementation"] = "flash_attention_2"
+                try:
+                    import flash_attn  # noqa: F401
+                    model_kwargs["attn_implementation"] = "flash_attention_2"
+                    logger.info("Using flash_attention_2")
+                except ImportError:
+                    logger.info("flash-attn not installed, using default attention")
             model_kwargs["device_map"] = "auto"
         else:
             model_kwargs["torch_dtype"] = torch.float32
@@ -218,12 +262,19 @@ class PatientEmbeddingProcessor:
         self.config = config or EmbeddingConfig()
         self._extractor = extractor
         self._config_for_lazy = self.config
+        self._load_failed = False
 
     @property
     def extractor(self) -> QwenEmbeddingExtractor:
-        """Lazy-load the model on first use."""
+        """Lazy-load the model on first use. Fail once, stop retrying."""
+        if self._load_failed:
+            raise RuntimeError("Model loading previously failed. Fix the issue and restart.")
         if self._extractor is None:
-            self._extractor = QwenEmbeddingExtractor(self._config_for_lazy)
+            try:
+                self._extractor = QwenEmbeddingExtractor(self._config_for_lazy)
+            except Exception:
+                self._load_failed = True
+                raise
         return self._extractor
 
     # -- input loaders (no model needed) ------------------------------------
@@ -256,6 +307,14 @@ class PatientEmbeddingProcessor:
             logger.warning("No texts to embed.")
             return {}
 
+        # Eagerly load the model before entering the loop — fail fast
+        try:
+            _ = self.extractor
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            logger.error("Cannot proceed. Fix the issue above and re-run.")
+            return {}
+
         eids = list(texts.keys())
         all_texts = [texts[eid] for eid in eids]
         batch_size = self.config.batch_size
@@ -270,7 +329,7 @@ class PatientEmbeddingProcessor:
                     embeddings[eid] = emb
             except Exception as e:
                 logger.error(f"Error embedding batch starting at index {i}: {e}")
-                # Fall back to one-by-one
+                # Fall back to one-by-one for this batch only
                 for eid, text in zip(batch_eids, batch_texts):
                     try:
                         embeddings[eid] = self.extractor.extract_embedding(text)
