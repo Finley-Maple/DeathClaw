@@ -116,12 +116,11 @@ python evaluation/cohort_split.py              # → evaluation/cohort_split.jso
 
 ### Step 4: Generate embedding inputs & Delphi binary data
 
-**Method 3 (text embedding):** convert trajectory data to natural-language summaries with age at diagnosis (e.g. "At age 20.3, patient was diagnosed with G43 migraine.").
+**Method 3 (text embedding):** convert trajectory data to disease-history text with age at diagnosis (e.g. "At age 20.3, patient was diagnosed with G43 migraine."). Only disease events are included; demographics and biomarkers are added as numeric features during survival model training.
 
 ```bash
 python preprocessing/natural_text_conversion.py \
     --trajectory-csv data/preprocessed/disease_trajectory.csv \
-    --survival-csv   benchmarking/autoprognosis_survival_dataset.csv \
     --output-csv     data/preprocessed/text_before60.csv \
     --output-dir     data/preprocessed/text_before60
 ```

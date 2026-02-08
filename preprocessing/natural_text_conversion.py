@@ -647,17 +647,18 @@ def _parse_disease_col(col: str):
 
 class DiseaseBefore60TextConverter:
     """
-    Produce a concise natural-language clinical summary per patient,
-    with disease history **including age at diagnosis** before age 60.
+    Produce a disease-history-only text per patient, with age at diagnosis.
 
-    Uses the disease_trajectory.csv (age-at-diagnosis matrix) to produce
-    text like:
-        "At age 20.3, patient was diagnosed with chronic kidney disease.
-         At age 40.6, patient was diagnosed with asthma."
+    Output text contains ONLY the disease events before age 60, e.g.:
+        "At age 20.3, patient was diagnosed with G43 migraine.
+         At age 40.6, patient was diagnosed with J45 asthma."
+
+    Other patient features (demographics, BMI, smoking, alcohol, biomarkers)
+    are intentionally excluded -- they are merged as separate numeric features
+    during survival model training (evaluate_embedding_survival.py).
 
     Input:
-        - disease_trajectory.csv           (age at diagnosis per disease)
-        - autoprognosis_survival_dataset.csv  (demographics / biomarkers)
+        - disease_trajectory.csv  (age at diagnosis per disease column)
 
     Output:
         - One text file per eid  OR  a single CSV  eid -> text
@@ -665,83 +666,29 @@ class DiseaseBefore60TextConverter:
 
     AGE_CUTOFF = 60.0
 
-    SEX_MAP = {0: "female", 0.0: "female", 1: "male", 1.0: "male"}
-    SMOKING_MAP = {0: "never smoker", 0.0: "never smoker",
-                   1: "previous smoker", 1.0: "previous smoker",
-                   2: "current smoker", 2.0: "current smoker"}
-    ALCOHOL_MAP = {
-        1: "daily or almost daily", 1.0: "daily or almost daily",
-        2: "three or four times a week", 2.0: "three or four times a week",
-        3: "once or twice a week", 3.0: "once or twice a week",
-        4: "one to three times a month", 4.0: "one to three times a month",
-        5: "special occasions only", 5.0: "special occasions only",
-        6: "never", 6.0: "never",
-    }
-
     def __init__(
         self,
         trajectory_csv: Path = None,
-        survival_csv: Path = None,
+        survival_csv: Path = None,   # kept for CLI compat; not used
     ):
         default_trajectory = PROJECT_ROOT / "data" / "preprocessed" / "disease_trajectory.csv"
-        default_survival = PROJECT_ROOT / "benchmarking" / "autoprognosis_survival_dataset.csv"
-
         self.trajectory_csv = trajectory_csv or default_trajectory
-        self.survival_csv = survival_csv or default_survival
 
     def _load_data(self, eids: Optional[List[int]] = None):
-        """Load trajectory matrix and survival demographics, merge by eid."""
-        surv_df = pd.read_csv(self.survival_csv)
-        surv_df["eid"] = surv_df["eid"].astype(int)
-
+        """Load trajectory matrix, optionally filtered by eids."""
         traj_df = pd.read_csv(self.trajectory_csv)
         traj_df["eid"] = traj_df["eid"].astype(int)
 
-        merged = surv_df.merge(traj_df, on="eid", how="inner", suffixes=("", "_traj"))
-        # Drop duplicate columns
-        dup_cols = [c for c in merged.columns if c.endswith("_traj")]
-        merged.drop(columns=dup_cols, inplace=True)
-
         if eids is not None:
-            merged = merged[merged["eid"].isin(set(eids))]
+            traj_df = traj_df[traj_df["eid"].isin(set(eids))]
 
         # Identify age columns from trajectory
         self._age_columns = [c for c in traj_df.columns if c.endswith("_age") and c != "eid"]
 
-        return merged
+        return traj_df
 
     def convert_row(self, row: pd.Series) -> str:
-        """Convert a single patient row to a natural-language summary."""
-        parts: List[str] = []
-
-        # -- Demographics --------------------------------------------------
-        eid = int(row.get("eid", 0))
-        sex_raw = row.get("sex")
-        sex = self.SEX_MAP.get(sex_raw, "unknown sex") if pd.notna(sex_raw) else "unknown sex"
-        age_raw = row.get("age")
-        birth_year = int(age_raw) if pd.notna(age_raw) else None
-
-        demo = f"Patient {eid} is {sex}"
-        if birth_year:
-            demo += f", born in {birth_year}"
-        parts.append(demo + ".")
-
-        # BMI
-        bmi = row.get("bmi")
-        if pd.notna(bmi):
-            cat = ("underweight" if bmi < 18.5 else "normal weight" if bmi < 25
-                   else "overweight" if bmi < 30 else "obese")
-            parts.append(f"BMI is {bmi:.1f} ({cat}).")
-
-        # Smoking & alcohol
-        sm = row.get("smoking_status")
-        if pd.notna(sm):
-            parts.append(f"Smoking status: {self.SMOKING_MAP.get(sm, 'unknown')}.")
-        alc = row.get("alcohol_status")
-        if pd.notna(alc):
-            parts.append(f"Alcohol consumption: {self.ALCOHOL_MAP.get(alc, 'unknown')}.")
-
-        # -- Disease history before 60 (with ages) -------------------------
+        """Convert a single patient row to disease-history text."""
         events: List[tuple] = []  # (age, "ICD_CODE disease_name")
         for col in self._age_columns:
             age_val = row.get(col)
@@ -757,33 +704,13 @@ class DiseaseBefore60TextConverter:
         events.sort(key=lambda x: x[0])
 
         if events:
-            disease_sentences = []
-            for age, disease in events:
-                disease_sentences.append(
-                    f"At age {age:.1f}, patient was diagnosed with {disease}."
-                )
-            parts.append("Disease history before age 60: " + " ".join(disease_sentences))
+            sentences = [
+                f"At age {age:.1f}, patient was diagnosed with {disease}."
+                for age, disease in events
+            ]
+            return " ".join(sentences)
         else:
-            parts.append("No diseases diagnosed before age 60.")
-
-        # -- Key biomarkers -----------------------------------------------
-        biomarker_parts: List[str] = []
-        bm_map = {
-            "hdl_cholesterol": ("HDL cholesterol", "mmol/L"),
-            "total_cholesterol": ("total cholesterol", "mmol/L"),
-            "hba1c": ("HbA1c", "mmol/mol"),
-            "c_reactive_protein": ("CRP", "mg/L"),
-            "creatinine": ("creatinine", "µmol/L"),
-            "haemoglobin": ("haemoglobin", "g/dL"),
-        }
-        for col, (name, unit) in bm_map.items():
-            val = row.get(col)
-            if pd.notna(val):
-                biomarker_parts.append(f"{name} {float(val):.2f} {unit}")
-        if biomarker_parts:
-            parts.append("Key biomarkers: " + "; ".join(biomarker_parts) + ".")
-
-        return " ".join(parts)
+            return "No diseases diagnosed before age 60."
 
     def generate_texts(
         self,
@@ -792,17 +719,17 @@ class DiseaseBefore60TextConverter:
         output_csv: Optional[Path] = None,
     ) -> pd.DataFrame:
         """
-        Generate natural-language summaries for the given eids.
+        Generate disease-history texts for the given eids.
 
         Returns a DataFrame with columns [eid, text].
         Optionally writes individual .txt files and/or a CSV.
         """
-        merged = self._load_data(eids)
-        print(f"Building text for {len(merged)} patients "
+        traj_df = self._load_data(eids)
+        print(f"Building text for {len(traj_df)} patients "
               f"({len(self._age_columns)} disease age columns)...")
         records: List[Dict] = []
 
-        for _, row in merged.iterrows():
+        for _, row in traj_df.iterrows():
             eid = int(row["eid"])
             text = self.convert_row(row)
             records.append({"eid": eid, "text": text})
@@ -831,12 +758,6 @@ def main_before60():
         type=Path,
         default=PROJECT_ROOT / "data" / "preprocessed" / "disease_trajectory.csv",
         help="Path to disease_trajectory.csv (age-at-diagnosis matrix).",
-    )
-    parser.add_argument(
-        "--survival-csv",
-        type=Path,
-        default=PROJECT_ROOT / "benchmarking" / "autoprognosis_survival_dataset.csv",
-        help="Path to autoprognosis_survival_dataset.csv.",
     )
     parser.add_argument(
         "--cohort-json",
@@ -868,7 +789,6 @@ def main_before60():
 
     converter = DiseaseBefore60TextConverter(
         trajectory_csv=args.trajectory_csv,
-        survival_csv=args.survival_csv,
     )
     converter.generate_texts(eids=eids, output_dir=args.output_dir, output_csv=args.output_csv)
 

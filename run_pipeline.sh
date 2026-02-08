@@ -214,10 +214,9 @@ if should_run 4; then
     log "STEP 4: Generate embedding inputs (text & trajectory) + Delphi binary"
     log_separator
 
-    log "  [Method 3] Generating natural-language texts (with ages from trajectory)..."
+    log "  [Method 3] Generating disease-history texts (with ages from trajectory)..."
     python preprocessing/natural_text_conversion.py \
         --trajectory-csv data/preprocessed/disease_trajectory.csv \
-        --survival-csv   benchmarking/autoprognosis_survival_dataset.csv \
         --output-csv     data/preprocessed/text_before60.csv \
         --output-dir     data/preprocessed/text_before60 \
         2>&1 | tee -a "$LOG_FILE"
