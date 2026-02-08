@@ -1,15 +1,15 @@
 """
-Benchmarking (AutoPrognosis) evaluation adapter for the shared cohort.
+Benchmarking survival model (CoxPH) for the shared cohort.
 
 This script:
   1. Loads the shared cohort split (train/val/test eids).
-  2. Loads the survival dataset, restricted to the shared split.
-  3. Trains an AutoPrognosis survival model on the train eids.
-  4. Evaluates on val/test eids.
+  2. Loads the survival dataset (binary disease + baseline features).
+  3. Trains a CoxPH model on the train split.
+  4. Evaluates C-index and time-dependent AUC on val/test.
   5. Saves metrics for the unified comparison.
 
 Usage:
-    python evaluation/evaluate_benchmarking.py [--study-name death_shared]
+    python evaluation/evaluate_benchmarking.py [--output-dir evaluation/benchmarking_results]
 """
 
 import argparse
@@ -81,18 +81,10 @@ def evaluate_benchmarking(args):
     time_horizons = sorted(set(h for h in time_horizons if h > 0))
     print(f"Time horizons: {time_horizons}")
 
-    # Try to use AutoPrognosis if available
-    results = {}
-    try:
-        from survival_baselines import train_and_evaluate_cox
-        results = train_and_evaluate_cox(
-            df_train, df_test, feature_cols, target_col, time_col, time_horizons
-        )
-    except ImportError:
-        print("AutoPrognosis not available. Using lifelines CoxPH as fallback...")
-        results = _evaluate_with_lifelines(
-            df_train, df_val, df_test, feature_cols, target_col, time_col, time_horizons
-        )
+    # Train and evaluate with lifelines CoxPH
+    results = _evaluate_with_lifelines(
+        df_train, df_val, df_test, feature_cols, target_col, time_col, time_horizons
+    )
 
     # Save results
     output_dir = Path(args.output_dir)

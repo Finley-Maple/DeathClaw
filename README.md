@@ -6,51 +6,148 @@ Predict **death after age 60** using patient features and disease history before
 
 | # | Method | Description |
 |---|--------|-------------|
-| 1 | **Delphi** | Generative transformer model for health trajectories; predicts "Death" token probability |
-| 2 | **Benchmarking (survival)** | AutoPrognosis survival models using binary disease features + baseline biomarkers |
-| 3 | **Text embedding** | Convert disease history to natural language, embed with Qwen, feed to survival model |
-| 4 | **Trajectory embedding** | Delphi-style token + age embeddings, pooled across events, feed to survival model |
+| 1 | **Delphi** | Generative transformer for health trajectories; predicts "Death" token probability. Evaluated with DeLong AUC. |
+| 2 | **Benchmarking (CoxPH)** | CoxPH survival model on binary disease features + baseline biomarkers. Evaluated with C-index and time-dependent AUC. |
+| 3 | **Text Embedding + CoxPH** | Convert disease history to natural language, embed with Qwen (text-only LM), combine with baselines, fit CoxPH. |
+| 4 | **Trajectory Embedding + CoxPH** | Delphi-style token + age embeddings (sin/cos), pool across events, combine with baselines, fit CoxPH. |
 
 ## Directory Structure
 
 ```
-├── benchmarking/           # AutoPrognosis survival pipeline
-├── Delphi/                 # Delphi model, evaluation, training code
-├── embedding/              # Qwen text embedding & trajectory embedding
-├── preprocessing/          # Disease trajectory generation, natural text conversion
-├── evaluation/             # Unified evaluation, cohort split, comparison
-├── data/                   # Raw / processed data (gitignored)
+├── benchmarking/           # Survival data preprocessing & CoxPH training
+│   ├── preprocess_diagnosis.py         # Extract disease features from UKB
+│   ├── preprocess_survival.py          # Build survival dataset (event_flag, duration_days)
+│   ├── autoprognosis_survival_dataset.csv  # Output: survival dataset
+│   └── disease_before60_features.csv       # Output: binary disease flags
+├── Delphi/                 # Delphi model, training & evaluation code
+│   ├── model.py, train.py, utils.py    # Core Delphi code
+│   └── evaluate_auc.py                 # AUC evaluation via DeLong
+├── embedding/              # Embedding extraction (methods 3 & 4)
+│   ├── qwen_embedding.py              # Qwen text-only embedding (method 3 tokens / method 4 texts)
+│   └── trajectory_embedding.py        # Token+age embedding pipeline (method 4)
+├── preprocessing/          # Preprocessing for embedding inputs
+│   ├── generate_disease_trajectory.py  # Build age-at-diagnosis matrix (disease_trajectory.csv)
+│   ├── generate_trajectory_text.py     # Convert matrix → Delphi-style trajectory text per patient
+│   └── natural_text_conversion.py      # Convert tabular data → natural-language text per patient
+├── evaluation/             # Unified evaluation & comparison
+│   ├── cohort_split.py                 # Define shared train/val/test split
+│   ├── evaluate_delphi.py              # Evaluate Delphi on shared cohort
+│   ├── evaluate_benchmarking.py        # Train & evaluate CoxPH on shared cohort
+│   ├── evaluate_embedding_survival.py  # Train & evaluate CoxPH on embeddings
+│   └── unified_evaluation.py           # Compare all methods in one table
+├── data/                   # Raw & processed data (gitignored)
 ├── UKB_extraction/         # UK Biobank data extraction tools
 └── docs/                   # Proposals, references
 ```
 
-## Quick Start
+## Pipeline (step by step)
 
-1. **Preprocessing**: Generate disease features and trajectories
-   ```bash
-   python benchmarking/preprocess_diagnosis.py
-   python benchmarking/preprocess_survival.py
-   python preprocessing/generate_disease_trajectory.py
-   ```
+### Step 0: UKB data extraction
 
-2. **Cohort split**: Define shared train/val/test split
-   ```bash
-   python evaluation/cohort_split.py
-   ```
+Extract raw UK Biobank data into `data/`. See `UKB_extraction/` for tooling.
 
-3. **Embeddings**: Generate text and trajectory embeddings
-   ```bash
-   python embedding/qwen_embedding.py --input-dir data/preprocessed/text_before60 --output-dir data/preprocessed/embeddings_text
-   python embedding/trajectory_embedding.py --input-dir data/preprocessed/trajectory_before60 --output-dir data/preprocessed/embeddings_traj
-   ```
+### Step 1: Build survival dataset & disease features
 
-4. **Evaluation**: Run unified evaluation
-   ```bash
-   python evaluation/unified_evaluation.py
-   ```
+These scripts produce the two CSV files that all downstream steps depend on.
+
+```bash
+python benchmarking/preprocess_diagnosis.py    # → disease_before60_features.csv
+python benchmarking/preprocess_survival.py     # → autoprognosis_survival_dataset.csv
+```
+
+### Step 2: Build disease trajectory matrix
+
+Generate per-patient age-at-diagnosis for all diseases (needed by method 4).
+
+```bash
+python preprocessing/generate_disease_trajectory.py   # → data/preprocessed/disease_trajectory.csv
+```
+
+### Step 3: Define shared cohort split
+
+Create a single train/val/test split (70/15/15, stratified) used by all methods.
+
+```bash
+python evaluation/cohort_split.py              # → evaluation/cohort_split.json
+```
+
+### Step 4: Generate embedding inputs
+
+**Method 3 (text embedding):** convert tabular data to natural-language summaries.
+
+```bash
+python preprocessing/natural_text_conversion.py \
+    --output-csv  data/preprocessed/text_before60.csv \
+    --output-dir  data/preprocessed/text_before60
+```
+
+**Method 4 (trajectory embedding):** convert trajectory matrix to Delphi-style text.
+
+```bash
+python preprocessing/generate_trajectory_text.py \
+    --output-csv  data/preprocessed/trajectory_before60.csv \
+    --output-dir  data/preprocessed/trajectory_before60
+```
+
+### Step 5: Compute embeddings
+
+**Method 3:** embed natural-language texts with Qwen (requires GPU).
+
+```bash
+python embedding/qwen_embedding.py \
+    --input-csv   data/preprocessed/text_before60.csv \
+    --output-dir  data/preprocessed/embeddings_text \
+    --tag patient
+```
+
+**Method 4:** embed trajectory token+age vectors.
+
+```bash
+# Random token embeddings (CPU, for testing):
+python embedding/trajectory_embedding.py \
+    --input-csv   data/preprocessed/trajectory_before60.csv \
+    --output-dir  data/preprocessed/embeddings_traj
+
+# Or with Qwen token embeddings (GPU):
+python embedding/trajectory_embedding.py \
+    --input-csv   data/preprocessed/trajectory_before60.csv \
+    --output-dir  data/preprocessed/embeddings_traj \
+    --token-mode  qwen
+```
+
+### Step 6: Train & evaluate each method
+
+Each evaluation script trains on the shared train split and evaluates on val/test.
+
+```bash
+# Method 1: Delphi
+python evaluation/evaluate_delphi.py
+
+# Method 2: Benchmarking (CoxPH on binary disease features)
+python evaluation/evaluate_benchmarking.py
+
+# Method 3: Text Embedding + CoxPH
+python evaluation/evaluate_embedding_survival.py \
+    --embedding-dir data/preprocessed/embeddings_text \
+    --tag patient \
+    --method-name text_embedding
+
+# Method 4: Trajectory Embedding + CoxPH
+python evaluation/evaluate_embedding_survival.py \
+    --embedding-dir data/preprocessed/embeddings_traj \
+    --tag trajectory \
+    --method-name trajectory_embedding
+```
+
+### Step 7: Unified comparison
+
+```bash
+python evaluation/unified_evaluation.py        # → evaluation/unified_comparison.csv
+```
 
 ## Requirements
 
 - Python 3.9+
-- See `Delphi/requirements.txt` and `embedding/requirements_qwen.txt` for model-specific dependencies
-- AutoPrognosis: `pip install autoprognosis`
+- Core: `numpy`, `pandas`, `lifelines`, `scikit-survival`, `tqdm`
+- Delphi: see `Delphi/requirements.txt`
+- Qwen embeddings: see `embedding/requirements_qwen.txt` (requires `transformers`, `torch`, GPU recommended)
