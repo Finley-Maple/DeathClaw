@@ -36,7 +36,7 @@ torch>=2.4.0
 # ---------------------------------------------------------------------------
 # Qwen3-Embedding (methods 3 & 4)
 # ---------------------------------------------------------------------------
-transformers>=4.51.0              # Required for Qwen3 model architecture
+transformers>=4.53.0              # Qwen3Model architecture support
 accelerate>=0.25.0                # Model loading / device_map
 
 # ---------------------------------------------------------------------------

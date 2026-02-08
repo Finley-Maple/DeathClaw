@@ -7,7 +7,7 @@
 
 # Core
 torch>=2.4.0                      # transformers>=4.51.0 disables PyTorch if < 2.4
-transformers>=4.51.0              # Required for Qwen3 model support
+transformers>=4.53.0              # Qwen3Model architecture support
 accelerate>=0.25.0
 
 # Optional: flash attention for faster GPU inference

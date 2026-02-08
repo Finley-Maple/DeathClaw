@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MIN_TORCH = (2, 4, 0)
-_MIN_TRANSFORMERS = (4, 51, 0)
+_MIN_TRANSFORMERS = (4, 53, 0)  # Qwen3Model fully supported from 4.53+
 
 
 def _check_versions():
@@ -177,8 +177,10 @@ class QwenEmbeddingExtractor:
         model_kwargs = {"trust_remote_code": True}
 
         # Use float16 on GPU, float32 on CPU
+        # NOTE: newer transformers deprecates "torch_dtype" in favor of "dtype"
+        dtype_key = "dtype"
         if self.config.device == "cuda":
-            model_kwargs["torch_dtype"] = torch.float16
+            model_kwargs[dtype_key] = torch.float16
             if self.config.use_flash_attn:
                 try:
                     import flash_attn  # noqa: F401
@@ -188,7 +190,7 @@ class QwenEmbeddingExtractor:
                     logger.info("flash-attn not installed, using default attention")
             model_kwargs["device_map"] = "auto"
         else:
-            model_kwargs["torch_dtype"] = torch.float32
+            model_kwargs[dtype_key] = torch.float32
 
         self.model = AutoModel.from_pretrained(
             self.config.model_name, **model_kwargs
