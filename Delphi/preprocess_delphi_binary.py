@@ -272,7 +272,8 @@ def convert_to_delphi_binary(
     # 1. Load label mapping
     print(f"Loading label mapping from {labels_csv}...")
     label_map = load_label_mapping(labels_csv)
-    print(f"  {len(label_map)} labels loaded (incl. {sum(1 for k in label_map if re.match(r'^[A-Z]\\d{2}$', k))} ICD codes)")
+    icd_count = sum(1 for k in label_map if re.match(r'^[A-Z]\d{2}$', k))
+    print(f"  {len(label_map)} labels loaded (incl. {icd_count} ICD codes)")
 
     # 2. Load disease trajectory data
     print(f"Loading trajectory data from {trajectory_csv}...")
