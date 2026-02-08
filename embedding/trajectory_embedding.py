@@ -330,11 +330,17 @@ def main():
     parser.add_argument("--text-col", type=str, default="trajectory_text")
     args = parser.parse_args()
 
-    # Optionally initialize Qwen for token embedding
+    # Optionally initialize Qwen3-Embedding for token embedding
     qwen_extractor = None
     if args.token_mode == "qwen":
         from qwen_embedding import QwenEmbeddingExtractor, EmbeddingConfig
-        qwen_extractor = QwenEmbeddingExtractor(EmbeddingConfig(use_4bit=True))
+        # Use the smallest model for per-token embedding (each token is a short string)
+        qwen_config = EmbeddingConfig(
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            embedding_dim=args.token_dim,  # MRL: truncate to token_dim
+            normalize=False,               # We'll normalize later in the pipeline
+        )
+        qwen_extractor = QwenEmbeddingExtractor(qwen_config)
 
     pipeline = TrajectoryEmbeddingPipeline(
         age_dim=args.age_dim,

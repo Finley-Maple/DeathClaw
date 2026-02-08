@@ -8,7 +8,7 @@ Predict **death after age 60** using patient features and disease history before
 |---|--------|-------------|
 | 1 | **Delphi** | Generative transformer for health trajectories; predicts "Death" token probability. Evaluated with DeLong AUC. |
 | 2 | **Benchmarking (CoxPH)** | CoxPH survival model on binary disease features + baseline biomarkers. Evaluated with C-index and time-dependent AUC. |
-| 3 | **Text Embedding + CoxPH** | Convert disease history to natural language, embed with Qwen (text-only LM), combine with baselines, fit CoxPH. |
+| 3 | **Text Embedding + CoxPH** | Convert disease history to natural language, embed with Qwen3-Embedding, combine with baselines, fit CoxPH. |
 | 4 | **Trajectory Embedding + CoxPH** | Delphi-style token + age embeddings (sin/cos), pool across events, combine with baselines, fit CoxPH. |
 
 ## Directory Structure
@@ -46,20 +46,20 @@ Predict **death after age 60** using patient features and disease history before
 Run the entire pipeline end-to-end with `run_pipeline.sh`:
 
 ```bash
-# Default: 10k sample, random trajectory token embeddings
+# Local / CPU: 10k sample, Qwen3-Embedding-0.6B (auto-selected)
 bash run_pipeline.sh
 
-# Full dataset (all UKB participants)
+# Full dataset, auto-selects model based on device
 bash run_pipeline.sh --full
 
-# Full dataset + Qwen token embeddings (GPU recommended)
-bash run_pipeline.sh --full --token-mode qwen
+# GPU server: full dataset, 8B model
+bash run_pipeline.sh --full --embedding-model Qwen/Qwen3-Embedding-8B
+
+# Mid-range GPU: 4B model
+bash run_pipeline.sh --full --embedding-model Qwen/Qwen3-Embedding-4B
 
 # Skip preprocessing if data already exists
-bash run_pipeline.sh --skip-preprocess
-
-# Run only specific steps (e.g. steps 5-7)
-bash run_pipeline.sh --steps 5,6,7
+bash run_pipeline.sh --skip-preprocess --steps 5,6,7
 
 # Skip Delphi (if no checkpoint available)
 bash run_pipeline.sh --skip-delphi
@@ -71,6 +71,7 @@ Options:
 |------|-------------|
 | `--full` | Use all participants instead of a 10k sample |
 | `--sample-size N` | Custom sample size (default: 10000) |
+| `--embedding-model MODEL` | Qwen3-Embedding-0.6B/4B/8B (auto-selected by device) |
 | `--token-mode random\|qwen` | Trajectory token embedding mode (default: random) |
 | `--skip-preprocess` | Skip steps 1-2 if CSV files already exist |
 | `--skip-delphi` | Skip Delphi evaluation |
@@ -133,13 +134,21 @@ python preprocessing/generate_trajectory_text.py \
 
 ### Step 5: Compute embeddings
 
-**Method 3:** embed natural-language texts with Qwen (requires GPU).
+**Method 3:** embed natural-language texts with Qwen3-Embedding.
 
 ```bash
+# GPU server (8B, 4096-dim):
 python embedding/qwen_embedding.py \
     --input-csv   data/preprocessed/text_before60.csv \
     --output-dir  data/preprocessed/embeddings_text \
-    --tag patient
+    --model-name  Qwen/Qwen3-Embedding-8B
+
+# Local / CPU (0.6B, 1024-dim):
+python embedding/qwen_embedding.py \
+    --input-csv   data/preprocessed/text_before60.csv \
+    --output-dir  data/preprocessed/embeddings_text \
+    --model-name  Qwen/Qwen3-Embedding-0.6B \
+    --no-flash-attn
 ```
 
 **Method 4:** embed trajectory token+age vectors.
@@ -192,4 +201,4 @@ python evaluation/unified_evaluation.py        # → evaluation/unified_comparis
 - Python 3.9+
 - Core: `numpy`, `pandas`, `lifelines`, `scikit-survival`, `tqdm`
 - Delphi: see `Delphi/requirements.txt`
-- Qwen embeddings: see `embedding/requirements_qwen.txt` (requires `transformers`, `torch`, GPU recommended)
+- Qwen3-Embedding: see `embedding/requirements_qwen.txt` (`transformers>=4.51.0`, `torch`; 0.6B runs on CPU, 8B needs GPU)

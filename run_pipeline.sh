@@ -6,8 +6,9 @@
 # Designed to be executed on a remote server (GPU or CPU).
 #
 # Usage:
-#   bash run_pipeline.sh                     # default: 10k sample, random token embeddings
+#   bash run_pipeline.sh                     # default: 10k sample, 0.6B model on CPU
 #   bash run_pipeline.sh --full              # use entire UKB dataset
+#   bash run_pipeline.sh --full --embedding-model Qwen/Qwen3-Embedding-8B   # GPU server
 #   bash run_pipeline.sh --token-mode qwen   # use Qwen for trajectory token embeddings
 #   bash run_pipeline.sh --skip-preprocess   # skip data preprocessing (already done)
 #   bash run_pipeline.sh --skip-delphi       # skip Delphi evaluation (no checkpoint)
@@ -34,6 +35,7 @@ cd "$SCRIPT_DIR"
 FULL_DATASET=false
 SAMPLE_SIZE=10000
 TOKEN_MODE="random"          # "random" or "qwen"
+EMBEDDING_MODEL=""           # auto-select based on device if empty
 SKIP_PREPROCESS=false
 SKIP_DELPHI=false
 STEPS=""                     # comma-separated step numbers, or empty for all
@@ -51,6 +53,9 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --token-mode)
             TOKEN_MODE="$2"
+            shift 2 ;;
+        --embedding-model)
+            EMBEDDING_MODEL="$2"
             shift 2 ;;
         --skip-preprocess)
             SKIP_PREPROCESS=true
@@ -82,6 +87,17 @@ if [[ -z "$DEVICE" ]]; then
         DEVICE="cuda"
     else
         DEVICE="cpu"
+    fi
+fi
+
+# Auto-select embedding model based on device if not explicitly set
+# GPU:   Qwen3-Embedding-8B  (4096-dim, best quality)
+# CPU:   Qwen3-Embedding-0.6B (1024-dim, fast)
+if [[ -z "$EMBEDDING_MODEL" ]]; then
+    if [[ "$DEVICE" == "cuda" ]]; then
+        EMBEDDING_MODEL="Qwen/Qwen3-Embedding-8B"
+    else
+        EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"
     fi
 fi
 
@@ -117,6 +133,7 @@ log_separator
 log "Working directory : $SCRIPT_DIR"
 log "Full dataset      : $FULL_DATASET"
 log "Sample size       : $(if $FULL_DATASET; then echo 'ALL'; else echo $SAMPLE_SIZE; fi)"
+log "Embedding model   : $EMBEDDING_MODEL"
 log "Token mode        : $TOKEN_MODE"
 log "Device            : $DEVICE"
 log "Random state      : $RANDOM_STATE"
@@ -220,18 +237,17 @@ if should_run 5; then
     log "STEP 5: Compute embeddings"
     log_separator
 
-    # Method 3: Text embeddings (requires GPU + model)
-    log "  [Method 3] Text embedding with Qwen..."
-    if [[ "$DEVICE" == "cuda" ]]; then
-        python embedding/qwen_embedding.py \
-            --input-csv   data/preprocessed/text_before60.csv \
-            --output-dir  data/preprocessed/embeddings_text \
-            --tag patient \
-            2>&1 | tee -a "$LOG_FILE"
-    else
-        log "  WARNING: No GPU detected. Qwen text embedding (method 3) requires GPU."
-        log "  Skipping text embedding. Re-run with --device cuda on a GPU server."
+    # Method 3: Text embeddings with Qwen3-Embedding
+    log "  [Method 3] Text embedding with $EMBEDDING_MODEL..."
+    QWEN_ARGS="--input-csv data/preprocessed/text_before60.csv \
+               --output-dir data/preprocessed/embeddings_text \
+               --tag patient \
+               --model-name $EMBEDDING_MODEL"
+    if [[ "$DEVICE" != "cuda" ]]; then
+        QWEN_ARGS="$QWEN_ARGS --no-flash-attn"
     fi
+
+    python embedding/qwen_embedding.py $QWEN_ARGS 2>&1 | tee -a "$LOG_FILE"
 
     # Method 4: Trajectory embeddings (works on CPU with random, GPU for qwen)
     log "  [Method 4] Trajectory embedding (token-mode=$TOKEN_MODE)..."

@@ -1,11 +1,17 @@
-# Requirements for Qwen2.5 Text Embedding Extraction
-# NOTE: Uses text-only model (AutoModelForCausalLM), NOT vision-language (VL).
+# Requirements for Qwen3-Embedding text embedding extraction
+#
+# Models:
+#   Qwen/Qwen3-Embedding-0.6B  (1024-dim, CPU-friendly)
+#   Qwen/Qwen3-Embedding-4B    (2560-dim, mid-range GPU)
+#   Qwen/Qwen3-Embedding-8B    (4096-dim, GPU recommended)
 
-# Core dependencies
+# Core
 torch>=2.0.0
-transformers>=4.37.0
+transformers>=4.51.0          # Required for Qwen3 model support
 accelerate>=0.25.0
-bitsandbytes>=0.41.0  # For quantization (4-bit / 8-bit)
+
+# Optional: flash attention for faster GPU inference
+# flash-attn>=2.5.0           # Uncomment if on Linux + CUDA
 
 # Data processing
 numpy>=1.24.0

@@ -1,31 +1,38 @@
 """
-Qwen2.5 Text Embedding Extractor for Patient Descriptions
+Qwen3-Embedding Extractor for Patient Descriptions
 
-Extracts embeddings from patient text descriptions using a Qwen text model
-(AutoModelForCausalLM + AutoTokenizer -- NOT the VL/vision-language variant).
+Uses Qwen3-Embedding models (dedicated embedding models, NOT generative LMs)
+to extract text embeddings for patient descriptions.
 
-Supports both:
-  - Method 1: disease-before-60 natural-language summaries
-  - Method 2: trajectory texts (when used as token embedder)
+Available models (pick based on hardware):
+  - Qwen/Qwen3-Embedding-0.6B  (1024-dim, ~1.2 GB, runs on CPU / laptop)
+  - Qwen/Qwen3-Embedding-4B    (2560-dim, ~8 GB,  mid-range GPU)
+  - Qwen/Qwen3-Embedding-8B    (4096-dim, ~16 GB, GPU recommended)
 
-Refactored for eid-based I/O: reads texts keyed by eid, outputs embeddings
-keyed by eid as .npz and metadata JSON.
+All models support Matryoshka Representation Learning (MRL), so you can
+truncate the embedding to any dimension <= max via --embedding-dim.
+
+Requires: transformers>=4.51.0, torch
 
 Usage:
+    # Local / CPU (0.6B model):
     python embedding/qwen_embedding.py \
         --input-csv data/preprocessed/text_before60.csv \
-        --output-dir data/preprocessed/embeddings_text
+        --output-dir data/preprocessed/embeddings_text \
+        --model-name Qwen/Qwen3-Embedding-0.6B
 
+    # GPU server (8B model):
     python embedding/qwen_embedding.py \
-        --input-dir data/preprocessed/text_before60 \
-        --output-dir data/preprocessed/embeddings_text
+        --input-csv data/preprocessed/text_before60.csv \
+        --output-dir data/preprocessed/embeddings_text \
+        --model-name Qwen/Qwen3-Embedding-8B
 """
 
 import argparse
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -34,30 +41,76 @@ os.environ.setdefault("PANDAS_NO_IMPORT_BOTTLENECK", "1")
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch import Tensor
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Default embedding dimensions per model (max native dim)
+MODEL_DEFAULT_DIM = {
+    "Qwen/Qwen3-Embedding-0.6B": 1024,
+    "Qwen/Qwen3-Embedding-4B": 2560,
+    "Qwen/Qwen3-Embedding-8B": 4096,
+}
+
+
+# ---------------------------------------------------------------------------
+# Pooling (last-token pool as recommended by Qwen3-Embedding)
+# ---------------------------------------------------------------------------
+
+def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+    """
+    Extract the embedding from the last non-padding token.
+
+    This is the recommended pooling method for Qwen3-Embedding models.
+    With left-padding (padding_side='left'), the last token is always
+    the final token in the sequence.
+    """
+    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+    if left_padding:
+        return last_hidden_states[:, -1]
+    else:
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[
+            torch.arange(batch_size, device=last_hidden_states.device),
+            sequence_lengths,
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 
 @dataclass
 class EmbeddingConfig:
-    """Configuration for embedding extraction."""
-    # Use a TEXT-ONLY model -- NOT the VL (vision-language) variant.
-    # Qwen2.5-VL-* pulls in AutoProcessor -> image_transforms -> tensorflow,
-    # which crashes with numpy >= 2.0.  A causal LM model avoids that entirely.
-    model_name: str = "Qwen/Qwen2.5-7B-Instruct"
+    """Configuration for Qwen3-Embedding extraction."""
+    # Model selection:
+    #   GPU:   Qwen/Qwen3-Embedding-8B  (best quality, ~16 GB)
+    #   Mid:   Qwen/Qwen3-Embedding-4B  (~8 GB)
+    #   Local: Qwen/Qwen3-Embedding-0.6B (~1.2 GB, CPU-friendly)
+    model_name: str = "Qwen/Qwen3-Embedding-0.6B"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    batch_size: int = 1
-    max_length: int = 2048
-    use_8bit: bool = False
-    use_4bit: bool = True
-    pooling_method: str = "mean"  # "mean", "cls", "last"
-    output_layer: int = -1        # Which hidden layer (-1 = last)
+    max_length: int = 8192
+    batch_size: int = 4
+    # MRL: truncate output to this many dims (0 = use full native dim)
+    embedding_dim: int = 0
+    # Instruction prefix for embedding (improves retrieval 1-5%)
+    instruction: str = ""
+    # Whether to L2-normalize embeddings
+    normalize: bool = True
+    # Use flash_attention_2 for faster inference on GPU
+    use_flash_attn: bool = True
 
+
+# ---------------------------------------------------------------------------
+# Extractor
+# ---------------------------------------------------------------------------
 
 class QwenEmbeddingExtractor:
-    """Extract embeddings from a Qwen causal-LM model."""
+    """Extract embeddings using a Qwen3-Embedding model."""
 
     def __init__(self, config: EmbeddingConfig = None):
         self.config = config or EmbeddingConfig()
@@ -66,92 +119,88 @@ class QwenEmbeddingExtractor:
         self._load_model()
 
     def _load_model(self):
-        """Load the Qwen TEXT model with optional quantization."""
+        """Load the Qwen3-Embedding model."""
         try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-
-            logger.info(f"Loading {self.config.model_name} on {self.config.device}...")
-
-            quantization_config = None
-            if self.config.use_4bit or self.config.use_8bit:
-                from transformers import BitsAndBytesConfig
-                if self.config.use_4bit:
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_use_double_quant=True,
-                        bnb_4bit_quant_type="nf4",
-                    )
-                    logger.info("Using 4-bit quantization")
-                else:
-                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                    logger.info("Using 8-bit quantization")
-
-            # Tokenizer (text-only, no image processor)
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.config.model_name, trust_remote_code=True
-            )
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-
-            # Model
-            model_kwargs = {"trust_remote_code": True, "torch_dtype": torch.float16}
-            if quantization_config:
-                model_kwargs["quantization_config"] = quantization_config
-                model_kwargs["device_map"] = "auto"
-            else:
-                model_kwargs["device_map"] = self.config.device
-
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.config.model_name, **model_kwargs
-            )
-            self.model.eval()
-            logger.info("Model loaded successfully!")
-
+            from transformers import AutoModel, AutoTokenizer
         except ImportError as e:
-            logger.error(f"Required packages not found: {e}")
-            logger.error("Install: pip install transformers accelerate bitsandbytes")
+            logger.error(f"transformers not found: {e}")
+            logger.error("Install: pip install 'transformers>=4.51.0' torch accelerate")
             raise
 
-    def _pool_embeddings(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        if self.config.pooling_method == "mean":
-            mask_expanded = attention_mask.unsqueeze(-1).expand(hidden_states.size()).float()
-            sum_embeddings = torch.sum(hidden_states * mask_expanded, dim=1)
-            sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
-            return sum_embeddings / sum_mask
-        elif self.config.pooling_method == "cls":
-            return hidden_states[:, 0, :]
-        elif self.config.pooling_method == "last":
-            batch_size = hidden_states.shape[0]
-            seq_lengths = attention_mask.sum(dim=1) - 1
-            return hidden_states[torch.arange(batch_size), seq_lengths]
+        logger.info(f"Loading {self.config.model_name} on {self.config.device}...")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model_name,
+            padding_side="left",
+            trust_remote_code=True,
+        )
+
+        model_kwargs = {"trust_remote_code": True}
+
+        # Use float16 on GPU, float32 on CPU
+        if self.config.device == "cuda":
+            model_kwargs["torch_dtype"] = torch.float16
+            if self.config.use_flash_attn:
+                model_kwargs["attn_implementation"] = "flash_attention_2"
+            model_kwargs["device_map"] = "auto"
         else:
-            raise ValueError(f"Unknown pooling method: {self.config.pooling_method}")
+            model_kwargs["torch_dtype"] = torch.float32
+
+        self.model = AutoModel.from_pretrained(
+            self.config.model_name, **model_kwargs
+        )
+        self.model.eval()
+
+        if self.config.device != "cuda" or "device_map" not in model_kwargs:
+            self.model = self.model.to(self.config.device)
+
+        native_dim = MODEL_DEFAULT_DIM.get(self.config.model_name, "unknown")
+        logger.info(f"Model loaded! Native embedding dim: {native_dim}")
+
+    def _get_target_dim(self) -> Optional[int]:
+        """Return the target embedding dimension, or None for full native dim."""
+        if self.config.embedding_dim > 0:
+            return self.config.embedding_dim
+        return None
 
     def extract_embedding(self, text: str) -> np.ndarray:
         """Extract embedding for a single text string."""
-        inputs = self.tokenizer(
-            text,
-            return_tensors="pt",
+        return self.extract_batch_embeddings([text])[0]
+
+    def extract_batch_embeddings(self, texts: List[str]) -> np.ndarray:
+        """Extract embeddings for a batch of texts."""
+        # Prepend instruction if set
+        if self.config.instruction:
+            texts = [
+                f"Instruct: {self.config.instruction}\nQuery: {t}"
+                for t in texts
+            ]
+
+        batch_dict = self.tokenizer(
+            texts,
             padding=True,
             truncation=True,
             max_length=self.config.max_length,
+            return_tensors="pt",
         )
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        batch_dict = {k: v.to(self.model.device) for k, v in batch_dict.items()}
 
         with torch.no_grad():
-            outputs = self.model(**inputs, output_hidden_states=True)
-            hidden_states = outputs.hidden_states[self.config.output_layer]
-            attention_mask = inputs["attention_mask"]
-            pooled = self._pool_embeddings(hidden_states, attention_mask)
-            return pooled.cpu().float().numpy().squeeze()
+            outputs = self.model(**batch_dict)
+            embeddings = last_token_pool(
+                outputs.last_hidden_state, batch_dict["attention_mask"]
+            )
 
-    def extract_batch_embeddings(self, texts: List[str]) -> np.ndarray:
-        """Extract embeddings for a list of texts (one at a time internally)."""
-        embeddings = []
-        for text in tqdm(texts, desc="Extracting embeddings"):
-            embeddings.append(self.extract_embedding(text))
-        return np.array(embeddings)
+            # MRL: truncate to target dim if specified
+            target_dim = self._get_target_dim()
+            if target_dim is not None:
+                embeddings = embeddings[:, :target_dim]
+
+            # L2 normalize
+            if self.config.normalize:
+                embeddings = F.normalize(embeddings, p=2, dim=1)
+
+            return embeddings.cpu().float().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +216,12 @@ class PatientEmbeddingProcessor:
         extractor: Optional[QwenEmbeddingExtractor] = None,
     ):
         self.config = config or EmbeddingConfig()
-        # Lazy init: only load the model when actually needed
         self._extractor = extractor
         self._config_for_lazy = self.config
 
     @property
     def extractor(self) -> QwenEmbeddingExtractor:
+        """Lazy-load the model on first use."""
         if self._extractor is None:
             self._extractor = QwenEmbeddingExtractor(self._config_for_lazy)
         return self._extractor
@@ -202,16 +251,32 @@ class PatientEmbeddingProcessor:
     # -- main pipeline (model loaded on first call) -------------------------
 
     def process(self, texts: Dict[int, str]) -> Dict[int, np.ndarray]:
-        """Extract an embedding for each eid."""
+        """Extract an embedding for each eid, batched for efficiency."""
         if not texts:
             logger.warning("No texts to embed.")
             return {}
+
+        eids = list(texts.keys())
+        all_texts = [texts[eid] for eid in eids]
+        batch_size = self.config.batch_size
         embeddings: Dict[int, np.ndarray] = {}
-        for eid, text in tqdm(texts.items(), desc="Embedding patients"):
+
+        for i in tqdm(range(0, len(all_texts), batch_size), desc="Embedding patients"):
+            batch_eids = eids[i : i + batch_size]
+            batch_texts = all_texts[i : i + batch_size]
             try:
-                embeddings[eid] = self.extractor.extract_embedding(text)
+                batch_embs = self.extractor.extract_batch_embeddings(batch_texts)
+                for eid, emb in zip(batch_eids, batch_embs):
+                    embeddings[eid] = emb
             except Exception as e:
-                logger.error(f"Error embedding eid {eid}: {e}")
+                logger.error(f"Error embedding batch starting at index {i}: {e}")
+                # Fall back to one-by-one
+                for eid, text in zip(batch_eids, batch_texts):
+                    try:
+                        embeddings[eid] = self.extractor.extract_embedding(text)
+                    except Exception as e2:
+                        logger.error(f"Error embedding eid {eid}: {e2}")
+
         return embeddings
 
     # -- save / load --------------------------------------------------------
@@ -253,7 +318,16 @@ class PatientEmbeddingProcessor:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract Qwen text embeddings for patient texts (eid-based).")
+    parser = argparse.ArgumentParser(
+        description="Extract Qwen3-Embedding text embeddings for patient texts (eid-based).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Model choices (pick based on hardware):
+  Qwen/Qwen3-Embedding-0.6B   1024-dim, ~1.2 GB  (CPU / laptop)
+  Qwen/Qwen3-Embedding-4B     2560-dim, ~8 GB    (mid-range GPU)
+  Qwen/Qwen3-Embedding-8B     4096-dim, ~16 GB   (GPU server)
+""",
+    )
     grp = parser.add_mutually_exclusive_group(required=True)
     grp.add_argument("--input-dir", type=Path, help="Directory with eid_*.txt files.")
     grp.add_argument("--input-csv", type=Path, help="CSV with [eid, text] columns.")
@@ -261,12 +335,20 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True, help="Where to save embeddings.")
     parser.add_argument("--tag", type=str, default="patient", help="File prefix for outputs.")
     parser.add_argument("--text-col", type=str, default="text", help="Text column name in CSV.")
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen2.5-7B-Instruct",
-                        help="HuggingFace model ID. Must be a text-only causal LM (not VL).")
-    parser.add_argument("--pooling", type=str, default="mean", choices=["mean", "cls", "last"])
-    parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--use-4bit", action="store_true", default=True)
-    parser.add_argument("--no-4bit", action="store_true", help="Disable 4-bit quantization.")
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-Embedding-0.6B",
+                        help="HuggingFace model ID (Qwen3-Embedding-0.6B/4B/8B).")
+    parser.add_argument("--max-length", type=int, default=8192,
+                        help="Max token length (Qwen3-Embedding supports up to 32k).")
+    parser.add_argument("--batch-size", type=int, default=4,
+                        help="Batch size for embedding extraction.")
+    parser.add_argument("--embedding-dim", type=int, default=0,
+                        help="Custom output dim via MRL (0 = full native dim).")
+    parser.add_argument("--instruction", type=str, default="",
+                        help="Task instruction prefix (e.g. 'Represent the clinical record').")
+    parser.add_argument("--no-normalize", action="store_true",
+                        help="Skip L2 normalization of embeddings.")
+    parser.add_argument("--no-flash-attn", action="store_true",
+                        help="Disable flash_attention_2.")
     args = parser.parse_args()
 
     # Load texts first (no model needed)
@@ -281,12 +363,15 @@ def main():
         logger.error("  Method 2: python preprocessing/generate_trajectory_text.py")
         return
 
-    # Now load the model and embed
+    # Configure and run
     config = EmbeddingConfig(
         model_name=args.model_name,
-        use_4bit=not args.no_4bit,
-        pooling_method=args.pooling,
         max_length=args.max_length,
+        batch_size=args.batch_size,
+        embedding_dim=args.embedding_dim,
+        instruction=args.instruction,
+        normalize=not args.no_normalize,
+        use_flash_attn=not args.no_flash_attn,
     )
 
     processor = PatientEmbeddingProcessor(config=config)
