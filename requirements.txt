@@ -1,0 +1,62 @@
+# =============================================================================
+# Death Prediction Pipeline — Unified Requirements
+# =============================================================================
+# Resolves version conflicts between Delphi, Qwen3-Embedding, and evaluation.
+#
+# NOTE: Delphi/requirements.txt pins numpy<2.0 and torch==2.3.0 because the
+# original repo used tensorflow (via Qwen2.5-VL). We no longer trigger that
+# import path — Qwen3-Embedding uses AutoModel, not AutoProcessor, so
+# tensorflow is never loaded. numpy 2.x is safe for all project code.
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# For GPU (CUDA) acceleration, install PyTorch with CUDA first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r requirements.txt
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Core (used by all components)
+# ---------------------------------------------------------------------------
+numpy>=1.24.0
+pandas>=2.0.0
+tqdm>=4.65.0
+scipy>=1.10.0                     # Delphi: DeLong AUC; preprocessing: stats
+
+# ---------------------------------------------------------------------------
+# PyTorch (Delphi + Qwen3-Embedding)
+# ---------------------------------------------------------------------------
+# Delphi originally pinned torch==2.3.0; we relax to >=2.3.0.
+# Install the CUDA variant separately if needed (see above).
+torch>=2.3.0
+
+# ---------------------------------------------------------------------------
+# Qwen3-Embedding (methods 3 & 4)
+# ---------------------------------------------------------------------------
+transformers>=4.51.0              # Required for Qwen3 model architecture
+accelerate>=0.25.0                # Model loading / device_map
+
+# ---------------------------------------------------------------------------
+# Survival analysis (benchmarking + evaluation)
+# ---------------------------------------------------------------------------
+lifelines>=0.27.0                 # CoxPH fitter, concordance index
+scikit-survival>=0.22.0           # Time-dependent AUC (cumulative_dynamic_auc)
+scikit-learn>=1.2.0               # Preprocessing (StandardScaler, train_test_split)
+
+# ---------------------------------------------------------------------------
+# Visualisation & analysis (Delphi, optional exploration)
+# ---------------------------------------------------------------------------
+matplotlib>=3.7.0
+seaborn>=0.12.0
+statsmodels>=0.14.0
+
+# ---------------------------------------------------------------------------
+# Optional — uncomment if needed
+# ---------------------------------------------------------------------------
+# wandb                           # Delphi training logging
+# autoprognosis                   # AutoPrognosis survival models (legacy)
+# shap                            # SHAP analysis for Delphi
+# umap-learn                      # UMAP visualisation
+# flash-attn>=2.5.0               # Flash Attention 2 (Linux + CUDA only)
+# openpyxl                        # Reading .xlsx files (preprocessing/variables.xlsx)

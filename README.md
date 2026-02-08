@@ -198,7 +198,28 @@ python evaluation/unified_evaluation.py        # → evaluation/unified_comparis
 
 ## Requirements
 
-- Python 3.9+
-- Core: `numpy`, `pandas`, `lifelines`, `scikit-survival`, `tqdm`
-- Delphi: see `Delphi/requirements.txt`
-- Qwen3-Embedding: see `embedding/requirements_qwen.txt` (`transformers>=4.51.0`, `torch`; 0.6B runs on CPU, 8B needs GPU)
+Python 3.9+. Install all dependencies at once:
+
+```bash
+pip install -r requirements.txt
+```
+
+For GPU (CUDA), install PyTorch with CUDA first:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
+
+Key dependencies and what uses them:
+
+| Package | Version | Used by |
+|---------|---------|---------|
+| `torch` | >=2.3.0 | Delphi, Qwen3-Embedding |
+| `transformers` | >=4.51.0 | Qwen3-Embedding (methods 3 & 4) |
+| `lifelines` | >=0.27.0 | CoxPH models (methods 2, 3, 4) |
+| `scikit-survival` | >=0.22.0 | Time-dependent AUC evaluation |
+| `numpy` | >=1.24.0 | All components |
+| `pandas` | >=2.0.0 | All components |
+
+See also: `Delphi/requirements.txt` (original Delphi deps), `embedding/requirements_qwen.txt` (Qwen-specific).
