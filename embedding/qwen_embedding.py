@@ -40,6 +40,41 @@ from typing import Dict, List, Optional
 os.environ.setdefault("PANDAS_NO_IMPORT_NUMEXPR", "1")
 os.environ.setdefault("PANDAS_NO_IMPORT_BOTTLENECK", "1")
 
+# ---------------------------------------------------------------------------
+# Workaround: prevent broken torchvision from crashing text-only models.
+#
+# transformers 5.x has a transitive import chain:
+#   modeling_qwen3 → modeling_layers → processing_utils → image_utils
+#     → from torchvision.transforms import InterpolationMode
+#
+# If torchvision is installed but incompatible with torch (common on shared
+# servers), this crashes with "operator torchvision::nms does not exist".
+# We don't need torchvision for text embedding, so we pre-empt the crash by
+# testing the import and injecting a stub if it fails.
+# ---------------------------------------------------------------------------
+import importlib
+import types
+
+def _patch_broken_torchvision():
+    """If torchvision is broken, inject a minimal stub so transformers skips it."""
+    try:
+        import torchvision  # noqa: F401
+    except (ImportError, RuntimeError, OSError):
+        # Create a minimal stub that satisfies the import chain
+        stub = types.ModuleType("torchvision")
+        stub.__version__ = "0.0.0"
+        stub.__path__ = []
+        sys.modules["torchvision"] = stub
+
+        transforms_stub = types.ModuleType("torchvision.transforms")
+        # InterpolationMode is the only thing image_utils.py needs
+        transforms_stub.InterpolationMode = type("InterpolationMode", (), {
+            "BILINEAR": 2, "BICUBIC": 3, "NEAREST": 0, "LANCZOS": 1,
+        })
+        sys.modules["torchvision.transforms"] = transforms_stub
+
+_patch_broken_torchvision()
+
 import numpy as np
 import torch
 import torch.nn.functional as F
