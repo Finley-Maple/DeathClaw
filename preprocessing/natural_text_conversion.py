@@ -4,16 +4,32 @@ Natural Language Text Conversion for UK Biobank Data
 This module converts structured UK Biobank patient data into human-readable
 clinical narratives suitable for LLMs and multimodal foundation models.
 
+Two modes:
+  1. Full narrative (original): broad clinical text across all UKB fields.
+  2. Disease-before-60 narrative (new): restricted to disease diagnoses
+     before age 60 plus key demographics, keyed by eid, for the survival
+     cohort. Used by embedding method 1.
+
 Author: Disease Prediction Research Team
 Date: 2025-11-09
 """
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional
+
+os.environ.setdefault("PANDAS_NO_IMPORT_NUMEXPR", "1")
+os.environ.setdefault("PANDAS_NO_IMPORT_BOTTLENECK", "1")
 
 import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
-from pathlib import Path
 import json
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class NaturalTextConverter:
@@ -597,4 +613,223 @@ class NaturalTextConverter:
             json.dump(all_processed_data, f, indent=2)
         
         return len(all_processed_data)
+
+
+# ---------------------------------------------------------------------------
+# Disease-before-60 text converter (new, for embedding method 1)
+# ---------------------------------------------------------------------------
+
+class DiseaseBefore60TextConverter:
+    """
+    Produce a concise natural-language clinical summary per patient,
+    restricted to disease history before age 60 and key demographics.
+
+    Input:
+        - disease_before60_features.csv   (binary disease flags per eid)
+        - autoprognosis_survival_dataset.csv  (demographics / biomarkers)
+
+    Output:
+        - One text file per eid  OR  a single CSV  eid -> text
+    """
+
+    # Friendly names for the binary disease flags produced by preprocess_diagnosis.py
+    DISEASE_NAMES = {
+        "atrial_fibrillation": "atrial fibrillation",
+        "diabetes_t1": "type 1 diabetes",
+        "diabetes_t2": "type 2 diabetes",
+        "diabetes_any": "diabetes (any type)",
+        "ckd": "chronic kidney disease",
+        "migraine": "migraine",
+        "systemic_lupus": "systemic lupus erythematosus",
+        "hiv": "HIV infection",
+        "mental_illness": "severe mental illness",
+        "lipid_disorder": "lipid disorder",
+        "cholesterol_disorder": "cholesterol disorder",
+        "depression": "depression",
+        "stroke": "stroke or transient ischaemic attack",
+        "erectile_dysfunction": "erectile dysfunction",
+        "rheumatoid_arthritis": "rheumatoid arthritis",
+        "hypertension_diagnosis": "hypertension",
+    }
+
+    SEX_MAP = {0: "female", 0.0: "female", 1: "male", 1.0: "male"}
+    SMOKING_MAP = {0: "never smoker", 0.0: "never smoker",
+                   1: "previous smoker", 1.0: "previous smoker",
+                   2: "current smoker", 2.0: "current smoker"}
+    ALCOHOL_MAP = {
+        1: "daily or almost daily", 1.0: "daily or almost daily",
+        2: "three or four times a week", 2.0: "three or four times a week",
+        3: "once or twice a week", 3.0: "once or twice a week",
+        4: "one to three times a month", 4.0: "one to three times a month",
+        5: "special occasions only", 5.0: "special occasions only",
+        6: "never", 6.0: "never",
+    }
+
+    def __init__(
+        self,
+        disease_csv: Path = None,
+        survival_csv: Path = None,
+    ):
+        default_disease = PROJECT_ROOT / "benchmarking" / "disease_before60_features.csv"
+        default_survival = PROJECT_ROOT / "benchmarking" / "autoprognosis_survival_dataset.csv"
+
+        self.disease_csv = disease_csv or default_disease
+        self.survival_csv = survival_csv or default_survival
+
+    def _load_data(self, eids: Optional[List[int]] = None):
+        """Load and merge disease flags with survival demographics."""
+        disease_df = pd.read_csv(self.disease_csv)
+        disease_df["eid"] = disease_df["eid"].astype(int)
+
+        surv_df = pd.read_csv(self.survival_csv)
+        surv_df["eid"] = surv_df["eid"].astype(int)
+
+        merged = surv_df.merge(disease_df, on="eid", how="left", suffixes=("", "_dup"))
+        # Drop duplicate disease columns from survival (they overlap)
+        dup_cols = [c for c in merged.columns if c.endswith("_dup")]
+        merged.drop(columns=dup_cols, inplace=True)
+
+        if eids is not None:
+            eid_set = set(eids)
+            merged = merged[merged["eid"].isin(eid_set)]
+
+        return merged
+
+    def convert_row(self, row: pd.Series) -> str:
+        """Convert a single patient row to a natural-language summary."""
+        parts: List[str] = []
+
+        # -- Demographics --------------------------------------------------
+        eid = int(row.get("eid", 0))
+        sex_raw = row.get("sex")
+        sex = self.SEX_MAP.get(sex_raw, "unknown sex") if pd.notna(sex_raw) else "unknown sex"
+        age_raw = row.get("age")
+        birth_year = int(age_raw) if pd.notna(age_raw) else None
+
+        demo = f"Patient {eid} is {sex}"
+        if birth_year:
+            demo += f", born in {birth_year}"
+        parts.append(demo + ".")
+
+        # BMI
+        bmi = row.get("bmi")
+        if pd.notna(bmi):
+            cat = ("underweight" if bmi < 18.5 else "normal weight" if bmi < 25
+                   else "overweight" if bmi < 30 else "obese")
+            parts.append(f"BMI is {bmi:.1f} ({cat}).")
+
+        # Smoking & alcohol
+        sm = row.get("smoking_status")
+        if pd.notna(sm):
+            parts.append(f"Smoking status: {self.SMOKING_MAP.get(sm, 'unknown')}.")
+        alc = row.get("alcohol_status")
+        if pd.notna(alc):
+            parts.append(f"Alcohol consumption: {self.ALCOHOL_MAP.get(alc, 'unknown')}.")
+
+        # -- Disease history before 60 ------------------------------------
+        diseases_present: List[str] = []
+        for col, name in self.DISEASE_NAMES.items():
+            val = row.get(col)
+            if pd.notna(val) and int(val) == 1:
+                diseases_present.append(name)
+
+        if diseases_present:
+            parts.append(
+                "Diseases diagnosed before age 60: " + ", ".join(diseases_present) + "."
+            )
+        else:
+            parts.append("No diseases diagnosed before age 60.")
+
+        # -- Key biomarkers -----------------------------------------------
+        biomarker_parts: List[str] = []
+        bm_map = {
+            "hdl_cholesterol": ("HDL cholesterol", "mmol/L"),
+            "total_cholesterol": ("total cholesterol", "mmol/L"),
+            "hba1c": ("HbA1c", "mmol/mol"),
+            "c_reactive_protein": ("CRP", "mg/L"),
+            "creatinine": ("creatinine", "µmol/L"),
+            "haemoglobin": ("haemoglobin", "g/dL"),
+        }
+        for col, (name, unit) in bm_map.items():
+            val = row.get(col)
+            if pd.notna(val):
+                biomarker_parts.append(f"{name} {float(val):.2f} {unit}")
+        if biomarker_parts:
+            parts.append("Key biomarkers: " + "; ".join(biomarker_parts) + ".")
+
+        return " ".join(parts)
+
+    def generate_texts(
+        self,
+        eids: Optional[List[int]] = None,
+        output_dir: Optional[Path] = None,
+        output_csv: Optional[Path] = None,
+    ) -> pd.DataFrame:
+        """
+        Generate natural-language summaries for the given eids.
+
+        Returns a DataFrame with columns [eid, text].
+        Optionally writes individual .txt files and/or a CSV.
+        """
+        merged = self._load_data(eids)
+        records: List[Dict] = []
+
+        for _, row in merged.iterrows():
+            eid = int(row["eid"])
+            text = self.convert_row(row)
+            records.append({"eid": eid, "text": text})
+
+            if output_dir is not None:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / f"eid_{eid}.txt").write_text(text, encoding="utf-8")
+
+        df = pd.DataFrame(records)
+
+        if output_csv is not None:
+            output_csv.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(output_csv, index=False)
+            print(f"Wrote {len(df)} patient texts to {output_csv}")
+
+        return df
+
+
+def main_before60():
+    """CLI entry point for generating disease-before-60 texts."""
+    parser = argparse.ArgumentParser(
+        description="Generate natural-language disease-before-60 summaries per patient."
+    )
+    parser.add_argument(
+        "--cohort-json",
+        type=Path,
+        default=PROJECT_ROOT / "evaluation" / "cohort_split.json",
+        help="Path to cohort_split.json (to restrict eids).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "preprocessed" / "text_before60",
+        help="Directory to write individual eid_*.txt files.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "preprocessed" / "text_before60.csv",
+        help="CSV with columns [eid, text].",
+    )
+    args = parser.parse_args()
+
+    # Load cohort eids
+    eids = None
+    if args.cohort_json.exists():
+        with open(args.cohort_json) as f:
+            cohort = json.load(f)
+        eids = cohort["train_eids"] + cohort["val_eids"] + cohort["test_eids"]
+        print(f"Loaded {len(eids)} eids from cohort split.")
+
+    converter = DiseaseBefore60TextConverter()
+    converter.generate_texts(eids=eids, output_dir=args.output_dir, output_csv=args.output_csv)
+
+
+if __name__ == "__main__":
+    main_before60()
 
